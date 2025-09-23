@@ -1,0 +1,34 @@
+[package]
+name = "ursa_minor_ffb"
+version = "0.6.0"
+edition = "2021"
+build = "src/build.rs"
+
+[dependencies]
+# GUI
+eframe = { version = "0.27", default-features = true }
+egui = "0.27"
+egui_extras = "0.27"
+
+# HID
+hidapi = "2.6"
+rusb = "0.9"
+
+# DLL loader for SimConnect
+libloading = "0.8"
+
+# utils
+tray-icon = "0.13"
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+anyhow = "1.0"
+thiserror = "1.0"
+instant = "0.1"
+
+[build-dependencies]
+embed-resource = "2.4"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
