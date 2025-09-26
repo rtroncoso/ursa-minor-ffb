@@ -45,37 +45,56 @@ jobs:
           echo "version=$SAFE_TAG" >> $GITHUB_OUTPUT
           # Normalize exe name (spaces -> no spaces in archive name)
           echo "bin_base=$(echo "$BIN_NAME" | tr -d ' ')" >> $GITHUB_OUTPUT
-
+  
       - name: Prepare bundle
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $dist = "dist"
-          New-Item -ItemType Directory -Force -Path $dist | Out-Null
-          $outDir = Join-Path $dist ("${{ steps.ver.outputs.bin_base }}-v${{ steps.ver.outputs.version }}-windows-x64")
+  
+          # Output dir
+          $outDir = Join-Path $PWD "dist"
+          if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-
-          # Copy binary
-          $exeName = "${{ env.BIN_NAME }}.exe"
-          Copy-Item "target\${{ env.PROFILE }}\$exeName" $outDir
-
-          # Optional assets (icon, etc.) if present
-          if (Test-Path "assets") { Copy-Item "assets" $outDir -Recurse }
-
-          # Top-level docs if present
-          foreach ($f in @("README.md","LICENSE","LICENSE.txt")) {
-            if (Test-Path $f) { Copy-Item $f $outDir }
+  
+          # Read package name from Cargo.toml
+          $toml = Get-Content -Raw "Cargo.toml"
+          if ($toml -match '(?ms)^\s*\[package\][\s\S]*?^\s*name\s*=\s*"(.*?)"\s*$') {
+            $pkg = $Matches[1]
+          } else {
+            throw "Could not parse package.name from Cargo.toml"
           }
-
-          # Zip it
-          $zipPath = "$outDir.zip"
+  
+          # Candidate exe paths produced by cargo (no spaces)
+          $cand1 = Join-Path "target\release" ($pkg + ".exe")                  # hyphen form
+          $cand2 = Join-Path "target\release" (($pkg -replace '-', '_') + ".exe") # underscore form
+  
+          # Resolve the actual built exe
+          if (Test-Path $cand1) {
+            $exeIn = (Resolve-Path $cand1).Path
+          } elseif (Test-Path $cand2) {
+            $exeIn = (Resolve-Path $cand2).Path
+          } else {
+            # Fallback: first .exe in release dir
+            $exeIn = (Get-ChildItem "target\release" -Filter *.exe -File | Select-Object -First 1).FullName
+            if (-not $exeIn) { throw "No .exe found in target\release" }
+          }
+  
+          # Pretty display name in the bundle (with spaces)
+          $prettyName = "Ursa Minor FFB.exe"
+          $exeOut = Join-Path $outDir $prettyName
+  
+          Copy-Item $exeIn $exeOut
+  
+          # Optional: include README, LICENSE, assets, etc.
+          if (Test-Path "README.md") { Copy-Item "README.md" $outDir }
+          if (Test-Path "LICENSE")   { Copy-Item "LICENSE"   $outDir }
+          if (Test-Path "assets")    { Copy-Item "assets"    $outDir -Recurse }
+  
+          # Zip for release
+          $zipPath = Join-Path $PWD ("ursa-minor-ffb-" + $env:GITHUB_REF_NAME + "-windows.zip")
           if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-          Compress-Archive -Path "$outDir\*" -DestinationPath $zipPath -Force
-
-          # SHA256
-          $hash = (Get-FileHash $zipPath -Algorithm SHA256).Hash
-          $hash | Out-File -FilePath (Join-Path $dist "SHA256SUMS.txt") -Encoding ascii
-          "$([System.IO.Path]::GetFileName($zipPath))  $hash" | Out-File -Append -FilePath (Join-Path $dist "SHA256SUMS.txt") -Encoding ascii
+          Compress-Archive -Path (Join-Path $outDir "*") -DestinationPath $zipPath
+          Write-Host "Bundle ready: $zipPath"
 
       - name: Upload artifact (CI)
         uses: actions/upload-artifact@v4
