@@ -1,0 +1,100 @@
+name: Build & Release (tagged)
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write     # required to create GitHub Releases
+
+jobs:
+  build-windows:
+    name: Windows x64
+    runs-on: windows-latest
+
+    env:
+      BIN_NAME: "Ursa Minor FFB"
+      PROFILE: "release"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
+  
+      - name: Build (release)
+        run: cargo build --locked --profile $env:PROFILE
+
+      - name: Determine version from tag
+        id: ver
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          SAFE_TAG="${TAG#v}"
+          echo "version=$SAFE_TAG" >> $GITHUB_OUTPUT
+          # Normalize exe name (spaces -> no spaces in archive name)
+          echo "bin_base=$(echo "$BIN_NAME" | tr -d ' ')" >> $GITHUB_OUTPUT
+
+      - name: Prepare bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $dist = "dist"
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          $outDir = Join-Path $dist ("${{ steps.ver.outputs.bin_base }}-v${{ steps.ver.outputs.version }}-windows-x64")
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+
+          # Copy binary
+          $exeName = "${{ env.BIN_NAME }}.exe"
+          Copy-Item "target\${{ env.PROFILE }}\$exeName" $outDir
+
+          # Optional assets (icon, etc.) if present
+          if (Test-Path "assets") { Copy-Item "assets" $outDir -Recurse }
+
+          # Top-level docs if present
+          foreach ($f in @("README.md","LICENSE","LICENSE.txt")) {
+            if (Test-Path $f) { Copy-Item $f $outDir }
+          }
+
+          # Zip it
+          $zipPath = "$outDir.zip"
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+          Compress-Archive -Path "$outDir\*" -DestinationPath $zipPath -Force
+
+          # SHA256
+          $hash = (Get-FileHash $zipPath -Algorithm SHA256).Hash
+          $hash | Out-File -FilePath (Join-Path $dist "SHA256SUMS.txt") -Encoding ascii
+          "$([System.IO.Path]::GetFileName($zipPath))  $hash" | Out-File -Append -FilePath (Join-Path $dist "SHA256SUMS.txt") -Encoding ascii
+
+      - name: Upload artifact (CI)
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-zip
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
+          draft: false
+          prerelease: ${{ contains(steps.ver.outputs.tag, 'rc') || contains(steps.ver.outputs.tag, 'beta') || contains(steps.ver.outputs.tag, 'alpha') }}
+          files: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
