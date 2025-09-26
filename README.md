@@ -9,12 +9,16 @@ It lets you tune rumble effects for different flight states like ground roll, fl
 
 ## 🚀 Build Instructions
 
-You’ll need the Rust toolchain installed ([rustup](https://rustup.rs/)).
+You’ll need the Rust toolchain installed ([rustup](https://rustup.rs/)) and enable the MSVC toolchain for rust:
+
+```bash
+rustup toolchain install stable-msvc
+```
 
 Clone and build:
 
 ```bash
-git clone https://github.com/yourname/ursa-minor-ffb.git
+git clone https://github.com/rtroncoso/ursa-minor-ffb.git
 cd ursa-minor-ffb
 cargo build --release
 ```
