@@ -31,7 +31,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           cache-all-crates: true
-  
+
       - name: Build (release)
         run: cargo build --locked --profile $env:PROFILE
 
@@ -45,17 +45,17 @@ jobs:
           echo "version=$SAFE_TAG" >> $GITHUB_OUTPUT
           # Normalize exe name (spaces -> no spaces in archive name)
           echo "bin_base=$(echo "$BIN_NAME" | tr -d ' ')" >> $GITHUB_OUTPUT
-  
+
       - name: Prepare bundle
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-  
+
           # Output dir
           $outDir = Join-Path $PWD "dist"
           if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-  
+
           # Read package name from Cargo.toml
           $toml = Get-Content -Raw "Cargo.toml"
           if ($toml -match '(?ms)^\s*\[package\][\s\S]*?^\s*name\s*=\s*"(.*?)"\s*$') {
@@ -63,11 +63,11 @@ jobs:
           } else {
             throw "Could not parse package.name from Cargo.toml"
           }
-  
+
           # Candidate exe paths produced by cargo (no spaces)
           $cand1 = Join-Path "target\release" ($pkg + ".exe")                  # hyphen form
           $cand2 = Join-Path "target\release" (($pkg -replace '-', '_') + ".exe") # underscore form
-  
+
           # Resolve the actual built exe
           if (Test-Path $cand1) {
             $exeIn = (Resolve-Path $cand1).Path
@@ -78,18 +78,18 @@ jobs:
             $exeIn = (Get-ChildItem "target\release" -Filter *.exe -File | Select-Object -First 1).FullName
             if (-not $exeIn) { throw "No .exe found in target\release" }
           }
-  
+
           # Pretty display name in the bundle (with spaces)
           $prettyName = "Ursa Minor FFB.exe"
           $exeOut = Join-Path $outDir $prettyName
-  
+
           Copy-Item $exeIn $exeOut
-  
+
           # Optional: include README, LICENSE, assets, etc.
           if (Test-Path "README.md") { Copy-Item "README.md" $outDir }
           if (Test-Path "LICENSE")   { Copy-Item "LICENSE"   $outDir }
           if (Test-Path "assets")    { Copy-Item "assets"    $outDir -Recurse }
-  
+
           # Zip for release
           $zipPath = Join-Path $PWD ("ursa-minor-ffb-" + $env:GITHUB_REF_NAME + "-windows.zip")
           if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
