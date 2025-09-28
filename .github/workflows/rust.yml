@@ -1,21 +1,20 @@
-name: Build & Release (tagged)
+name: release-windows
 
 on:
   push:
     tags:
-      - "v*"
+      - "v*.*.*"
 
 permissions:
-  contents: write     # required to create GitHub Releases
+  contents: write
 
 jobs:
-  build-windows:
-    name: Windows x64
+  build:
     runs-on: windows-latest
 
     env:
-      BIN_NAME: "Ursa Minor FFB"
-      PROFILE: "release"
+      # Human-readable app name you show in the UI
+      BIN_NAME: Ursa Minor FFB
 
     steps:
       - name: Checkout
@@ -24,96 +23,95 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
           components: clippy
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-        with:
-          cache-all-crates: true
 
       - name: Build (release)
-        run: cargo build --locked --profile $env:PROFILE
+        run: cargo build --release --locked
 
-      - name: Determine version from tag
-        id: ver
-        shell: bash
-        run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          SAFE_TAG="${TAG#v}"
-          echo "version=$SAFE_TAG" >> $GITHUB_OUTPUT
-          # Normalize exe name (spaces -> no spaces in archive name)
-          echo "bin_base=$(echo "$BIN_NAME" | tr -d ' ')" >> $GITHUB_OUTPUT
-
-      - name: Prepare bundle
+      - name: Prepare bundle (zip + checksums)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
-          # Output dir
-          $outDir = Join-Path $PWD "dist"
-          if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
-          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          $tag = "${{ github.ref_name }}"
+          $repo = "${{ github.event.repository.name }}"
+          $dist = "dist"
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
-          # Read package name from Cargo.toml
-          $toml = Get-Content -Raw "Cargo.toml"
-          if ($toml -match '(?ms)^\s*\[package\][\s\S]*?^\s*name\s*=\s*"(.*?)"\s*$') {
-            $pkg = $Matches[1]
-          } else {
-            throw "Could not parse package.name from Cargo.toml"
+          # Try to locate the exe produced by cargo:
+          #   - dashed (cargo default from package name) e.g. "ursa-minor-ffb.exe"
+          #   - exact BIN_NAME (if you defined [[bin]] name with spaces)
+          $binDashed = ($env:BIN_NAME -replace '[^\w\-]', '-').ToLower()
+          $candidates = @(
+            "target\release\$binDashed.exe",
+            "target\release\$($env:BIN_NAME).exe"
+          )
+
+          $exePath = $null
+          foreach ($c in $candidates) {
+            if (Test-Path $c) { $exePath = (Resolve-Path $c).Path; break }
+          }
+          if (-not $exePath) {
+            $exe = Get-ChildItem "target\release\*.exe" | Select-Object -First 1
+            if ($exe) { $exePath = $exe.FullName }
+          }
+          if (-not $exePath) {
+            Write-Error "Could not find built .exe in target\release"
           }
 
-          # Candidate exe paths produced by cargo (no spaces)
-          $cand1 = Join-Path "target\release" ($pkg + ".exe")                  # hyphen form
-          $cand2 = Join-Path "target\release" (($pkg -replace '-', '_') + ".exe") # underscore form
+          Write-Host "Found EXE: $exePath"
 
-          # Resolve the actual built exe
-          if (Test-Path $cand1) {
-            $exeIn = (Resolve-Path $cand1).Path
-          } elseif (Test-Path $cand2) {
-            $exeIn = (Resolve-Path $cand2).Path
-          } else {
-            # Fallback: first .exe in release dir
-            $exeIn = (Get-ChildItem "target\release" -Filter *.exe -File | Select-Object -First 1).FullName
-            if (-not $exeIn) { throw "No .exe found in target\release" }
-          }
+          # Zip name: <repo>-<tag>-windows.zip (e.g. ursa-minor-ffb-v1.2.3-windows.zip)
+          $zipName = "$repo-$tag-windows.zip"
+          $zipPath = Join-Path $dist $zipName
 
-          # Pretty display name in the bundle (with spaces)
-          $prettyName = "Ursa Minor FFB.exe"
-          $exeOut = Join-Path $outDir $prettyName
+          # Create a minimal bundle: just the EXE (rename inside zip to the nice BIN_NAME)
+          $tmpDir = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP "bundle") | Select-Object -ExpandProperty FullName
+          Copy-Item $exePath (Join-Path $tmpDir "$($env:BIN_NAME).exe")
 
-          Copy-Item $exeIn $exeOut
+          Compress-Archive -Path (Join-Path $tmpDir "*") -DestinationPath $zipPath -Force
 
-          # Optional: include README, LICENSE, assets, etc.
-          if (Test-Path "README.md") { Copy-Item "README.md" $outDir }
-          if (Test-Path "LICENSE")   { Copy-Item "LICENSE"   $outDir }
-          if (Test-Path "assets")    { Copy-Item "assets"    $outDir -Recurse }
+          # Generate SHA256SUMS.txt for the zip
+          $hash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLower()
+          $sumLine = "$hash  $zipName"
+          $sumFile = Join-Path $dist "SHA256SUMS.txt"
+          Set-Content -Path $sumFile -Value $sumLine -NoNewline
 
-          # Zip for release
-          $zipPath = Join-Path $PWD ("ursa-minor-ffb-" + $env:GITHUB_REF_NAME + "-windows.zip")
-          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-          Compress-Archive -Path (Join-Path $outDir "*") -DestinationPath $zipPath
-          Write-Host "Bundle ready: $zipPath"
+          Write-Host "Created: $zipPath"
+          Write-Host "Checksums: $sumFile"
 
-      - name: Upload artifact (CI)
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: windows-x64-zip
+          name: windows-x64
           path: |
             dist/*.zip
             dist/SHA256SUMS.txt
           if-no-files-found: error
 
+  release:
+    needs: build
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-x64
+          path: dist
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.ver.outputs.tag }}
-          name: ${{ steps.ver.outputs.tag }}
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: "Automated release for ${{ github.ref_name }}"
           draft: false
-          prerelease: ${{ contains(steps.ver.outputs.tag, 'rc') || contains(steps.ver.outputs.tag, 'beta') || contains(steps.ver.outputs.tag, 'alpha') }}
+          prerelease: false
           files: |
             dist/*.zip
             dist/SHA256SUMS.txt
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

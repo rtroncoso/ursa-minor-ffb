@@ -3773,7 +3773,7 @@ dependencies = [
 
 [[package]]
 name = "ursa_minor_ffb"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
