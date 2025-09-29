@@ -83,6 +83,14 @@ struct SimRecvException {
     dw_index: DWord,
 }
 
+#[repr(C)]
+struct SimRecvEvent {
+    base: SimRecv,
+    u_group_id: DWord,
+    u_event_id: DWord,
+    dw_data: DWord, // for Pause: 1=paused, 0=unpaused; EX1 returns bit flags
+}
+
 const SIMCONNECT_RECV_ID_OPEN: DWord = 2;
 const SIMCONNECT_RECV_ID_QUIT: DWord = 3;
 const SIMCONNECT_RECV_ID_EVENT: DWord = 4;
@@ -101,6 +109,10 @@ const USER_OBJECT_ID: DWord = 0;
 const EVT_SIM_START: DWord = 1001;
 const EVT_SIM_STOP: DWord = 1002;
 const EVT_FRAME: DWord = 1003;
+
+// Local IDs for pause subscriptions
+const EVT_PAUSE_SYS: DWord = 4101;
+const EVT_PAUSE_EX1_SYS: DWord = 4102;
 
 const DEF_MAIN: DWord = 2001;
 const REQ_MAIN: DWord = 3001;
@@ -168,10 +180,10 @@ fn load_simconnect() -> Result<SimConnectFns> {
             *lib.get(b"SimConnect_RequestDataOnSimObject\0")?;
         let next_dispatch: PfnSimConnectGetNextDispatch =
             *lib.get(b"SimConnect_GetNextDispatch\0")?;
-        let subscribe_event: Option<PfnSimConnectSubscribeToSystemEvent> =
-            lib.get::<PfnSimConnectSubscribeToSystemEvent>(b"SimConnect_SubscribeToSystemEvent\0")
-                .ok()
-                .map(|s| *s);
+        let subscribe_event: Option<PfnSimConnectSubscribeToSystemEvent> = lib
+            .get::<PfnSimConnectSubscribeToSystemEvent>(b"SimConnect_SubscribeToSystemEvent\0")
+            .ok()
+            .map(|s| *s);
 
         Ok(SimConnectFns {
             _lib: Arc::new(lib),
@@ -229,6 +241,7 @@ struct FlightVars {
     on_ground: bool,
     bank_deg: f64,
     flaps_pct: f64,   // 0..100 (avg L/R)
+    flaps_index: i32, // integer detent, from FLAPS HANDLE INDEX
     gear_handle: f64, // 0..1
     stalled: bool,
     ground_speed_kt: f64, // knots
@@ -261,6 +274,11 @@ struct RumbleConfig {
     thump_min_period_s: f64, // at end
     thump_max_period_s: f64, // at start
     thump_duty: f64,         // fraction of period that the thump is "on"
+
+    // envelopes
+    flaps_bump_duration_s: f64, // seconds per flaps thump
+    flaps_bump_eps_pct: f64,    // % movement to trigger (fallback when handle index unavailable)
+    gear_bump_duration_s: f64,  // seconds per gear thump
 }
 impl Default for RumbleConfig {
     fn default() -> Self {
@@ -280,6 +298,10 @@ impl Default for RumbleConfig {
             thump_min_period_s: 0.25,
             thump_max_period_s: 0.90,
             thump_duty: 0.22,
+
+            flaps_bump_duration_s: 1.0,
+            flaps_bump_eps_pct: 2.0,
+            gear_bump_duration_s: 0.8,
         }
     }
 }
@@ -393,7 +415,14 @@ fn yoke_badge_dot(ui: &mut egui::Ui, connected: bool) {
     };
     ui.horizontal(|ui| {
         circle_indicator_colored(ui, color, filled);
-        ui.colored_label(color, if connected { "Yoke: Connected" } else { "Yoke: Disconnected" });
+        ui.colored_label(
+            color,
+            if connected {
+                "Yoke: Connected"
+            } else {
+                "Yoke: Disconnected"
+            },
+        );
     });
 }
 
@@ -490,7 +519,10 @@ impl UiState {
                 let mut tmp = *val as f32;
                 let r = (*range.start() as f32)..=(*range.end() as f32);
                 if ui
-                    .add_sized([w, desired_h], egui::Slider::new(&mut tmp, r).trailing_fill(true))
+                    .add_sized(
+                        [w, desired_h],
+                        egui::Slider::new(&mut tmp, r).trailing_fill(true),
+                    )
                     .changed()
                 {
                     *val = tmp as f64;
@@ -587,8 +619,10 @@ impl eframe::App for UiState {
 
                 // Read current effects activation for indicator dots
                 let ground_active = self.effects.ground_active.load(Ordering::Relaxed);
-                let ground_thump_active = self.effects.ground_thump_active.load(Ordering::Relaxed);
-                let taxi_start_crossed = self.effects.taxi_start_crossed.load(Ordering::Relaxed);
+                let ground_thump_active =
+                    self.effects.ground_thump_active.load(Ordering::Relaxed);
+                let taxi_start_crossed =
+                    self.effects.taxi_start_crossed.load(Ordering::Relaxed);
                 let taxi_end_crossed = self.effects.taxi_end_crossed.load(Ordering::Relaxed);
 
                 self.config.with_mut(|cfg| {
@@ -699,7 +733,11 @@ impl eframe::App for UiState {
                 let v = *self.last_vars.lock();
                 match v {
                     Some(v) => {
-                        UiState::kv_line(ui, "Airspeed (kt)", format!("{:.1}", v.airspeed_indicated));
+                        UiState::kv_line(
+                            ui,
+                            "Airspeed (kt)",
+                            format!("{:.1}", v.airspeed_indicated),
+                        );
                         UiState::kv_line(ui, "GS (kt)", format!("{:.1}", v.ground_speed_kt));
                         UiState::kv_line(ui, "On Ground", v.on_ground.to_string());
                         UiState::kv_line(ui, "Bank (°)", format!("{:.1}", v.bank_deg));
@@ -707,7 +745,11 @@ impl eframe::App for UiState {
                         UiState::kv_line(
                             ui,
                             "Gear",
-                            if v.gear_handle > 0.5 { "Down".to_string() } else { "Up".to_string() },
+                            if v.gear_handle > 0.5 {
+                                "Down".to_string()
+                            } else {
+                                "Up".to_string()
+                            },
                         );
                         UiState::kv_line(ui, "Stall", v.stalled.to_string());
                         UiState::kv_line(ui, "Paused", v.paused.to_string());
@@ -984,9 +1026,34 @@ fn sim_worker(
                     let ev_c = std::ffi::CString::new(*ev).unwrap();
                     let hr = sub(h_sc, *id, ev_c.as_ptr());
                     if hr < 0 {
-                        logs.push(format!("SimConnect: subscribe {} FAILED {}", ev, hr_hex(hr)));
+                        logs.push(format!(
+                            "SimConnect: subscribe {} FAILED {}",
+                            ev,
+                            hr_hex(hr)
+                        ));
                     }
                 }
+
+                // Subscribe to Pause + Pause_EX1 for reliable paused state
+                if let Ok(c) = std::ffi::CString::new("Pause") {
+                    let hr = sub(h_sc, EVT_PAUSE_SYS, c.as_ptr());
+                    if hr < 0 {
+                        logs.push(format!(
+                            "SimConnect: subscribe Pause FAILED {}",
+                            hr_hex(hr)
+                        ));
+                    }
+                }
+                if let Ok(c) = std::ffi::CString::new("Pause_EX1") {
+                    let hr = sub(h_sc, EVT_PAUSE_EX1_SYS, c.as_ptr());
+                    if hr < 0 {
+                        logs.push(format!(
+                            "SimConnect: subscribe Pause_EX1 FAILED {}",
+                            hr_hex(hr)
+                        ));
+                    }
+                }
+                logs.push("SimConnect: Pause subscriptions active.".to_string());
             }
 
             // ----------- Data definitions (explicit, correct units) -----------
@@ -1004,16 +1071,17 @@ fn sim_worker(
                 )
             };
 
-            // Index map:
+            // Index map (must match parsing):
             // 0 IAS (kt), 1 OnGround (bool), 2 Bank (deg),
-            // 3 Flaps L (%), 4 Flaps R (%), 5 Gear (bool),
-            // 6 Stall (bool), 7 AbsTime (s), 8 GS (kt), 9 Paused (bool)
+            // 3 Flaps L (%), 4 Flaps R (%), 5 FLAPS HANDLE INDEX (Number),
+            // 6 Gear (bool), 7 Stall (bool), 8 AbsTime (s), 9 GS (kt), 10 Paused (bool)
             let defs = [
                 ("AIRSPEED INDICATED", "Knots"),
                 ("SIM ON GROUND", "Bool"),
                 ("PLANE BANK DEGREES", "Degrees"),
                 ("TRAILING EDGE FLAPS LEFT PERCENT", "Percent"),
                 ("TRAILING EDGE FLAPS RIGHT PERCENT", "Percent"),
+                ("FLAPS HANDLE INDEX", "Number"),
                 ("GEAR HANDLE POSITION", "Bool"),
                 ("STALL WARNING", "Bool"),
                 ("ABSOLUTE TIME", "Seconds"),
@@ -1123,8 +1191,9 @@ fn sim_worker(
             let mut main_seen = false;
             let mut last_main_rx = Instant::now();
 
-            // Flaps envelope
+            // Flaps/gear envelopes
             let mut prev_flaps_pct: f64 = 0.0;
+            let mut prev_flaps_idx: i32 = 0;
             let mut flap_t0: f64 = -1.0;
             let mut flap_t1: f64 = -1.0;
             let mut flap_peak: f64 = 0.0;
@@ -1134,6 +1203,10 @@ fn sim_worker(
             let mut gear_t0: f64 = -1.0;
             let mut gear_t1: f64 = -1.0;
             let mut gear_peak: f64 = 0.0;
+
+            // Pause state from events (more reliable than the simvar alone)
+            let mut paused_event_flag: bool = false; // Pause (1/0)
+            let mut paused_ex1_bits: u32 = 0;        // Pause_EX1 flags
 
             loop {
                 let mut p_recv: *mut SimRecv = std::ptr::null_mut();
@@ -1151,6 +1224,14 @@ fn sim_worker(
                         SIMCONNECT_RECV_ID_QUIT => {
                             break;
                         }
+                        SIMCONNECT_RECV_ID_EVENT => {
+                            let ev = &*(p_recv as *const SimRecvEvent);
+                            if ev.u_event_id == EVT_PAUSE_SYS {
+                                paused_event_flag = ev.dw_data != 0;
+                            } else if ev.u_event_id == EVT_PAUSE_EX1_SYS {
+                                paused_ex1_bits = ev.dw_data;
+                            }
+                        }
                         SIMCONNECT_RECV_ID_SIMOBJECT_DATA => {
                             let sod = &*(p_recv as *const SimRecvSimObjectData);
                             let base_ptr = p_recv as *const u8;
@@ -1162,7 +1243,8 @@ fn sim_worker(
                             if sod.dw_request_id == REQ_TITLE {
                                 if payload_len >= 256 {
                                     let s_ptr = data_ptr as *const c_char;
-                                    let title = CStr::from_ptr(s_ptr).to_string_lossy().into_owned();
+                                    let title =
+                                        CStr::from_ptr(s_ptr).to_string_lossy().into_owned();
                                     *aircraft_title.lock() = title;
                                 }
                             } else if sod.dw_request_id == REQ_MAIN {
@@ -1182,11 +1264,11 @@ fn sim_worker(
                                 }
 
                                 // Copy into local f64 array
-                                let mut elem = [0f64; 10];
+                                let mut elem = [0f64; 11];
                                 if want_f64 {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f64,
-                                        count.min(10),
+                                        count.min(11),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x;
@@ -1194,12 +1276,17 @@ fn sim_worker(
                                 } else {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f32,
-                                        count.min(10),
+                                        count.min(11),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x as f64;
                                     }
                                 }
+
+                                // Prefer event-driven paused state; fall back to simvar
+                                let paused_from_var = elem.get(10).copied().unwrap_or(0.0) != 0.0;
+                                let paused_from_events =
+                                    paused_event_flag || (paused_ex1_bits != 0);
 
                                 // Map to struct
                                 let mut fv = FlightVars {
@@ -1210,11 +1297,12 @@ fn sim_worker(
                                         + elem.get(4).copied().unwrap_or(0.0))
                                         * 0.5)
                                         .clamp(0.0, 100.0), // %
-                                    gear_handle: elem.get(5).copied().unwrap_or(0.0), // 0/1
-                                    stalled: elem.get(6).copied().unwrap_or(0.0) != 0.0,
-                                    sim_time_s: elem.get(7).copied().unwrap_or(0.0), // s
-                                    ground_speed_kt: elem.get(8).copied().unwrap_or(0.0).max(0.0), // kt
-                                    paused: elem.get(9).copied().unwrap_or(0.0) != 0.0,
+                                    flaps_index: elem.get(5).copied().unwrap_or(0.0).round() as i32, // detent
+                                    gear_handle: elem.get(6).copied().unwrap_or(0.0),               // 0/1
+                                    stalled: elem.get(7).copied().unwrap_or(0.0) != 0.0,            // bool
+                                    sim_time_s: elem.get(8).copied().unwrap_or(0.0),                // s
+                                    ground_speed_kt: elem.get(9).copied().unwrap_or(0.0).max(0.0),  // kt
+                                    paused: paused_from_events || paused_from_var,
                                 };
 
                                 // Sanity & deadband
@@ -1235,8 +1323,7 @@ fn sim_worker(
                                 // Store latest vars (UI reads instantly)
                                 *last_vars.lock() = Some(fv);
 
-                                *status.lock() = if !fv.on_ground && fv.airspeed_indicated > 30.0
-                                {
+                                *status.lock() = if !fv.on_ground && fv.airspeed_indicated > 30.0 {
                                     SimStatus::InFlight
                                 } else {
                                     SimStatus::Connected
@@ -1251,13 +1338,17 @@ fn sim_worker(
                                 let at_or_above_end = fv.on_ground && gs >= end;
                                 let at_or_above_start = fv.on_ground && gs >= start;
 
-                                effects.taxi_start_crossed
+                                effects
+                                    .taxi_start_crossed
                                     .store(at_or_above_start, Ordering::Relaxed);
-                                effects.taxi_end_crossed
+                                effects
+                                    .taxi_end_crossed
                                     .store(at_or_above_end, Ordering::Relaxed);
-                                effects.ground_thump_active
+                                effects
+                                    .ground_thump_active
                                     .store(in_thump_band, Ordering::Relaxed);
-                                effects.ground_active
+                                effects
+                                    .ground_active
                                     .store(at_or_above_end, Ordering::Relaxed);
 
                                 effects.stall_active.store(fv.stalled, Ordering::Relaxed);
@@ -1276,20 +1367,31 @@ fn sim_worker(
                                     continue;
                                 }
 
-                                // Flaps bump (delta on trailing-edge avg)
-                                let dflap = (fv.flaps_pct - prev_flaps_pct).abs();
-                                if dflap >= 0.2 {
+                                // Flaps bump — prefer HANDLE INDEX (robust per-step pulse).
+                                if fv.flaps_index != prev_flaps_idx {
+                                    let steps = (fv.flaps_index - prev_flaps_idx).abs().max(1)
+                                        as usize;
                                     flap_t0 = fv.sim_time_s;
-                                    flap_t1 = fv.sim_time_s + 1.0;
-                                    let scale = (dflap / 25.0).min(1.0);
-                                    flap_peak = (cfg_now.flaps_peak as f64) * scale;
+                                    flap_t1 =
+                                        fv.sim_time_s + cfg_now.flaps_bump_duration_s * steps as f64;
+                                    flap_peak = cfg_now.flaps_peak as f64;
+                                    prev_flaps_idx = fv.flaps_index;
+                                } else {
+                                    // Fallback: use % delta if handle index didn’t change (odd aircraft)
+                                    let dflap = (fv.flaps_pct - prev_flaps_pct).abs();
+                                    if dflap >= cfg_now.flaps_bump_eps_pct {
+                                        flap_t0 = fv.sim_time_s;
+                                        flap_t1 = fv.sim_time_s + cfg_now.flaps_bump_duration_s;
+                                        let scale = (dflap / 12.5).clamp(0.5, 1.0);
+                                        flap_peak = (cfg_now.flaps_peak as f64) * scale;
+                                    }
+                                    prev_flaps_pct = fv.flaps_pct;
                                 }
-                                prev_flaps_pct = fv.flaps_pct;
 
-                                // Gear bump 0↔1
+                                // Gear bump 0↔1 (deploy/retract command)
                                 if (fv.gear_handle - prev_gear).abs() >= 0.5 {
                                     gear_t0 = fv.sim_time_s;
-                                    gear_t1 = fv.sim_time_s + 0.8;
+                                    gear_t1 = fv.sim_time_s + cfg_now.gear_bump_duration_s;
                                     gear_peak = cfg_now.gear_peak as f64;
                                 }
                                 prev_gear = fv.gear_handle;
@@ -1301,12 +1403,13 @@ fn sim_worker(
 
                                 if fv.on_ground && gs >= start {
                                     // Normalize in [0,1] across the thump band
-                                    let t_norm =
-                                        ((gs - start) / (end - start)).clamp(0.0, 1.0);
+                                    let t_norm = ((gs - start) / (end - start)).clamp(0.0, 1.0);
 
                                     // Thump period decreases from max_period at start to min_period at end
                                     let period = cfg_now.thump_max_period_s
-                                        - t_norm * (cfg_now.thump_max_period_s - cfg_now.thump_min_period_s);
+                                        - t_norm
+                                            * (cfg_now.thump_max_period_s
+                                                - cfg_now.thump_min_period_s);
 
                                     // Convert to a repeating cycle 0..1
                                     let cycle = (fv.sim_time_s / period).fract();
@@ -1315,7 +1418,6 @@ fn sim_worker(
                                     let duty = cfg_now.thump_duty.clamp(0.05, 0.4);
                                     let in_pulse = cycle < duty;
                                     let thump_env = if in_pulse {
-                                        // use a sin window rising and falling inside the duty window
                                         let p = (cycle / duty).clamp(0.0, 1.0);
                                         (std::f64::consts::PI * p).sin()
                                     } else {
@@ -1323,18 +1425,19 @@ fn sim_worker(
                                     };
 
                                     // Amplitude ramps with t_norm
-                                    let amp = (cfg_now.ground_roll as f64)
-                                        * (0.35 + 0.65 * t_norm); // start softer, end stronger
+                                    let amp =
+                                        (cfg_now.ground_roll as f64) * (0.35 + 0.65 * t_norm);
 
                                     ground_term = thump_env * amp;
 
                                     // Once we exceed end, switch to continuous
                                     if gs >= end {
                                         let f_hz = 8.0; // steady rumble
-                                        let phase = (2.0 * std::f64::consts::PI * f_hz * fv.sim_time_s)
-                                            .sin()
-                                            * 0.5
-                                            + 0.5;
+                                        let phase =
+                                            (2.0 * std::f64::consts::PI * f_hz * fv.sim_time_s)
+                                                .sin()
+                                                * 0.5
+                                                + 0.5;
                                         ground_term = (cfg_now.ground_roll as f64) * phase;
                                     }
                                 }
@@ -1372,17 +1475,24 @@ fn sim_worker(
                                     && fv.sim_time_s <= gear_t1
                                     && gear_peak > 0.0;
                                 if flap_active {
-                                    let p =
-                                        ((fv.sim_time_s - flap_t0) / (flap_t1 - flap_t0)).clamp(0.0, 1.0);
-                                    transients += flap_peak * (std::f64::consts::PI * p).sin();
+                                    // If multiple steps were queued into one window, create a repeating
+                                    // thump train (one “sin π” per second).
+                                    let elapsed = fv.sim_time_s - flap_t0;
+                                    let period = 1.0_f64.max(cfg_now.flaps_bump_duration_s);
+                                    let phase = (elapsed % period) / period;
+                                    transients += flap_peak * (std::f64::consts::PI * phase).sin();
                                 }
                                 if gear_active {
                                     let p =
                                         ((fv.sim_time_s - gear_t0) / (gear_t1 - gear_t0)).clamp(0.0, 1.0);
                                     transients += gear_peak * (std::f64::consts::PI * p).sin();
                                 }
-                                effects.flaps_bump_active.store(flap_active, Ordering::Relaxed);
-                                effects.gear_bump_active.store(gear_active, Ordering::Relaxed);
+                                effects
+                                    .flaps_bump_active
+                                    .store(flap_active, Ordering::Relaxed);
+                                effects
+                                    .gear_bump_active
+                                    .store(gear_active, Ordering::Relaxed);
 
                                 let mut total = bg_smoothed + transients;
                                 if fv.stalled {
@@ -1440,7 +1550,9 @@ fn sim_worker(
 // Tray helpers
 // -----------------------------
 fn exe_dir() -> Option<PathBuf> {
-    std::env::current_exe().ok().and_then(|p| p.parent().map(|x| x.to_path_buf()))
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|x| x.to_path_buf()))
 }
 
 fn load_tray_icon() -> Option<TrayIconImage> {
@@ -1497,7 +1609,7 @@ fn run_tray(tx_ui: Sender<UiCmd>) {
     let click_rx = TrayIconEvent::receiver();
 
     loop {
-        // Menu events (blocking wait with timeout-ish by mixing two receivers)
+        // Menu events
         if let Ok(event) = menu_rx.try_recv() {
             let _ = if event.id() == item_show.id() {
                 tx_ui.send(UiCmd::Show)
@@ -1514,7 +1626,7 @@ fn run_tray(tx_ui: Sender<UiCmd>) {
             };
         }
 
-        // Tray icon click events
+        // Tray icon click events (field, not method)
         if let Ok(ev) = click_rx.try_recv() {
             if ev.click_type == ClickType::Left {
                 let _ = tx_ui.send(UiCmd::Toggle);
@@ -1626,7 +1738,11 @@ fn main() -> Result<()> {
         tx_ui,
     };
 
-    let run = eframe::run_native("Ursa Minor FFB", native_options, Box::new(|_cc| Box::new(app)));
+    let run = eframe::run_native(
+        "Ursa Minor FFB",
+        native_options,
+        Box::new(|_cc| Box::new(app)),
+    );
 
     let _ = tx_hid.send(HidCmd::SendIntensity(0)); // silence on exit
     thread::sleep(Duration::from_millis(60));
