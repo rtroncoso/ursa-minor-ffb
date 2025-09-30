@@ -94,7 +94,7 @@ jobs:
 
   release:
     needs: build
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
@@ -104,14 +104,29 @@ jobs:
           name: windows-x64
           path: dist
 
-      - name: Create GitHub Release
+      # 1) Create or update a DRAFT release and upload assets
+      - name: Create Draft Release & Upload Assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           body: "Automated release for ${{ github.ref_name }}"
-          draft: false
+          draft: true                 # <-- important: draft first
           prerelease: false
+          generate_release_notes: false
+          fail_on_unmatched_files: true
           files: |
             dist/*.zip
             dist/SHA256SUMS.txt
+
+      # 2) Publish the draft so it becomes visible/latest
+      - name: Publish Draft Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Ensure the draft exists, then publish it
+          gh release view "$TAG" --repo "$REPO" >/dev/null
+          gh release edit "$TAG" --repo "$REPO" --draft=false --latest
