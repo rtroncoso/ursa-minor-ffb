@@ -169,11 +169,15 @@ unsafe extern "system" fn wnd_proc(
                             updater::spawn_check(st.hwnd, st.version_str);
                         }
                         ID_TRAY_QUIT => {
-                            // Remove icon & force-exit to avoid zombies.
+                            // Remove tray icon
                             let mut nid = st.nid;
                             let _ = Shell_NotifyIconW(NIM_DELETE, &mut nid);
+
+                            // Tell eframe to close the main window
+                            st.ctx.send_viewport_cmd(ViewportCommand::Close);
+
+                            // Destroy the tray window
                             let _ = DestroyWindow(hwnd);
-                            std::process::exit(0);
                         }
                         _ => {}
                     }
