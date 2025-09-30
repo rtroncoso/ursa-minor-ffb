@@ -282,14 +282,14 @@ impl Default for RumbleConfig {
             base_airspeed: 16.0,
             ground_roll: 38.0,
             flaps_peak: 60.0,
-            gear_peak: 38.0,
+            gear_peak: 110.0,
             stall_ceiling: 160.0,
-            bank: 22.0,
+            bank: 70.0,
             max_output: 255,
             smoothing_alpha: 0.18,
             ias_deadband_kn: 1.0,
 
-            taxi_start_kn: 5.0,
+            taxi_start_kn: 3.0,
             taxi_end_kn: 10.0,
             thump_min_period_s: 0.25,
             thump_max_period_s: 0.90,
@@ -399,7 +399,7 @@ fn status_badge(ui: &mut egui::Ui, status: &SimStatus) {
     });
 }
 
-fn yoke_badge_dot(ui: &mut egui::Ui, connected: bool) {
+fn controller_badge_dot(ui: &mut egui::Ui, connected: bool) {
     let (color, filled) = if connected {
         (Color32::from_rgb(30, 180, 90), true)
     } else {
@@ -410,16 +410,16 @@ fn yoke_badge_dot(ui: &mut egui::Ui, connected: bool) {
         ui.colored_label(
             color,
             if connected {
-                "Yoke: Connected"
+                "Sidestick: Connected"
             } else {
-                "Yoke: Disconnected"
+                "Sidestick: Disconnected"
             },
         );
     });
 }
 
 struct UiState {
-    yoke_connected: Arc<AtomicBool>,
+    controller_connected: Arc<AtomicBool>,
     sim_connected: Arc<AtomicBool>,
 
     status: Arc<Mutex<SimStatus>>,
@@ -549,13 +549,13 @@ impl eframe::App for UiState {
 
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
-                // Sim + Yoke status
+                // Sim + Controller status
                 let st = *self.status.lock();
                 status_badge(ui, &st);
                 ui.separator();
 
-                let yoke_ok = self.yoke_connected.load(Ordering::Relaxed);
-                yoke_badge_dot(ui, yoke_ok);
+                let controller_ok = self.controller_connected.load(Ordering::Relaxed);
+                controller_badge_dot(ui, controller_ok);
 
                 // Aircraft title
                 let ac = self.aircraft_title.lock().clone();
@@ -573,23 +573,21 @@ impl eframe::App for UiState {
                 }
 
                 ui.separator();
-                // Stop / Resume + Minimize on same row
+                // Stop / Resume only (no minimize-to-tray anymore)
                 let holding = self.hold.load(Ordering::Relaxed);
                 if !holding {
                     if ui.button("⛔ Stop").clicked() {
                         self.hold.store(true, Ordering::Relaxed);
                         let _ = self.tx_hid.send(HidCmd::SetHold(true));
+                        tray::notify_held(true);
                     }
                 } else if ui.button("▶ Resume").clicked() {
                     self.hold.store(false, Ordering::Relaxed);
                     let _ = self.tx_hid.send(HidCmd::SetHold(false));
+                    tray::notify_held(false);
                 }
                 if holding {
                     ui.colored_label(Color32::LIGHT_RED, "OUTPUT HELD");
-                }
-
-                if ui.button("Minimize to tray").clicked() {
-                    let _ = self.tx_ui.send(UiCmd::Hide);
                 }
             });
         });
@@ -600,6 +598,7 @@ impl eframe::App for UiState {
         let show_debug = self.active_tab == Tab::Debug;
         #[cfg(not(debug_assertions))]
         let show_debug = false;
+        let _ = show_debug; // silence unused in release
 
         if show_main {
             egui::CentralPanel::default().show(ctx, |ui| {
@@ -805,27 +804,22 @@ impl eframe::App for UiState {
             match self.rx_ui.try_recv() {
                 Ok(cmd) => match cmd {
                     UiCmd::Show => {
-                        // Restore and bring it back
+                        // Bring to front (from taskbar minimized state)
                         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                         ctx.request_repaint();
                     }
-                    UiCmd::Hide => {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-                    }
-                    UiCmd::Toggle => {
-                        // A simple, robust toggle: always un-minimize & make visible
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                        ctx.request_repaint();
-                    }
+                    UiCmd::Hide => { /* no-op: minimize-to-tray removed */ }
+                    UiCmd::Toggle => { /* no-op: removed */ }
                     UiCmd::Stop => {
                         self.hold.store(true, Ordering::Relaxed);
                         let _ = self.tx_hid.send(HidCmd::SetHold(true));
+                        tray::notify_held(true);
                     }
                     UiCmd::Resume => {
                         self.hold.store(false, Ordering::Relaxed);
                         let _ = self.tx_hid.send(HidCmd::SetHold(false));
+                        tray::notify_held(false);
                     }
                     UiCmd::Quit => {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -850,7 +844,7 @@ fn build_simapp_vibe_payload(intensity: u8) -> [u8; 14] {
 }
 
 // -----------------------------
-// HID worker
+// HID worker — optimized idle CPU
 // -----------------------------
 struct HidEntry {
     dev: HidDevice,
@@ -871,7 +865,7 @@ fn hid_send_out(devs: &Vec<HidEntry>, intensity: u8) -> usize {
     ok
 }
 
-fn hid_worker(yoke_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, _logs: LogBuffer) {
+fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, _logs: LogBuffer) {
     let mut api = match HidApi::new() {
         Ok(a) => a,
         Err(_) => {
@@ -917,7 +911,7 @@ fn hid_worker(yoke_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, _logs: LogB
                 }
             }
         }
-        yoke_connected.store(!devices.is_empty(), Ordering::Relaxed);
+        controller_connected.store(!devices.is_empty(), Ordering::Relaxed);
         last_scan = Instant::now();
     };
 
@@ -1044,7 +1038,7 @@ fn sim_worker(
                 logs.push("SimConnect: Pause subscriptions active.".to_string());
             }
 
-            // ----------- Data definitions (explicit, correct units) -----------
+            // ----------- Data definitions -----------
             let add = |def_id: DWord, name_s: &str, unit_s: &str| -> HRESULT {
                 let n = std::ffi::CString::new(name_s).unwrap();
                 let u = std::ffi::CString::new(unit_s).unwrap();
@@ -1059,10 +1053,7 @@ fn sim_worker(
                 )
             };
 
-            // Index map (must match parsing):
-            // 0 IAS (kt), 1 OnGround (bool), 2 Bank (deg),
-            // 3 Flaps L (%), 4 Flaps R (%), 5 FLAPS HANDLE INDEX (Number),
-            // 6 Gear (bool), 7 Stall (bool), 8 AbsTime (s), 9 GS (kt), 10 Paused (bool)
+            // Index map (must match parsing)
             let defs = [
                 ("AIRSPEED INDICATED", "Knots"),
                 ("SIM ON GROUND", "Bool"),
@@ -1537,10 +1528,14 @@ fn sim_worker(
 // main
 // -----------------------------
 fn main() -> Result<()> {
+    if updater::early_self_update_hook() {
+        return Ok(());
+    }
+
     let (tx_hid, rx_hid) = unbounded::<HidCmd>();
     let (tx_ui, rx_ui) = unbounded::<UiCmd>();
 
-    let yoke_connected = Arc::new(AtomicBool::new(false));
+    let controller_connected = Arc::new(AtomicBool::new(false));
     let sim_connected = Arc::new(AtomicBool::new(false));
     let last_vars = Arc::new(Mutex::new(None::<FlightVars>));
     let logs = LogBuffer::default();
@@ -1550,15 +1545,11 @@ fn main() -> Result<()> {
     let status = Arc::new(Mutex::new(SimStatus::Disconnected));
     let aircraft_title = Arc::new(Mutex::new(String::new()));
 
-    if updater::early_self_update_hook() {
-        return Ok(());
-    }
-
     {
-        let yoke_flag = yoke_connected.clone();
+        let controller_flag = controller_connected.clone();
         let rx = rx_hid.clone();
         let logs = logs.clone();
-        thread::spawn(move || hid_worker(yoke_flag, rx, logs));
+        thread::spawn(move || hid_worker(controller_flag, rx, logs));
     }
 
     {
@@ -1586,6 +1577,7 @@ fn main() -> Result<()> {
         });
     }
 
+    // Compact window; disable resize/maximize
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([420.0, 520.0])
@@ -1596,8 +1588,9 @@ fn main() -> Result<()> {
         ..Default::default()
     };
 
+    // Prepare the app instance (owned by the closure)
     let app = UiState {
-        yoke_connected,
+        controller_connected,
         sim_connected,
 
         status,
@@ -1630,24 +1623,26 @@ fn main() -> Result<()> {
         tx_ui: tx_ui.clone(),
     };
 
-    let tx_ui_tray = tx_ui.clone();
-    let app_for_creator = app;
+    // Clone for the closure to keep lifetimes 'static.
+    let tx_ui_for_tray = tx_ui.clone();
 
     let run = eframe::run_native(
         "Ursa Minor FFB",
         native_options,
         Box::new(move |cc| {
-            // Spawn tray now that we have the egui context
+            // Start tray with egui Context so clicks can bring the window to front.
+            let ctx = cc.egui_ctx.clone();
             tray::spawn_tray_with_ctx(
-                tx_ui_tray.clone(),
-                cc.egui_ctx.clone(),
+                tx_ui_for_tray.clone(),
+                ctx.clone(),
                 env!("CARGO_PKG_VERSION"),
             );
-            Box::new(app_for_creator)
+            Box::new(app)
         }),
     );
 
-    let _ = tx_hid.send(HidCmd::SendIntensity(0)); // silence on exit
+    // Ensure silence on exit
+    let _ = tx_hid.send(HidCmd::SendIntensity(0));
     thread::sleep(Duration::from_millis(60));
 
     run.map_err(|e| anyhow::anyhow!("eframe failed: {e}"))

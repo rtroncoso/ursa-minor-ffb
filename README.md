@@ -1,6 +1,6 @@
 # Ursa Minor FFB
 
-Unlock the full potential of your Winwing Ursa Minor yoke with custom force-feedback and rumble effects powered by Microsoft Flight Simulator’s SimConnect API.
+Unlock the full potential of your Winwing Ursa Minor Sidestick with custom force-feedback and rumble effects powered by Microsoft Flight Simulator’s SimConnect API.
 
 This project is a lightweight desktop app written in Rust with an egui UI and HID output.
 It lets you tune rumble effects for different flight states like ground roll, flaps, gear, stall, and more.
