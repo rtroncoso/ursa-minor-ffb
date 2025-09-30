@@ -1,8 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod tray;
+mod updater;
+
 use std::collections::HashSet;
 use std::ffi::{c_char, c_void, CStr};
-use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
@@ -18,12 +20,6 @@ use egui_extras::{Column, TableBuilder};
 use hidapi::{HidApi, HidDevice};
 use libloading::Library;
 use parking_lot::Mutex;
-
-// Tray icon
-use tray_icon::{
-    menu::{Menu, MenuEvent, MenuItem},
-    ClickType, Icon as TrayIconImage, TrayIcon, TrayIconBuilder, TrayIconEvent,
-};
 
 // -----------------------------
 // Winwing IDs
@@ -339,10 +335,10 @@ impl ConfigShared {
 struct EffectsState {
     flaps_bump_active: AtomicBool,
     gear_bump_active: AtomicBool,
-    ground_active: AtomicBool,       // continuous ground rumble active (>= end)
+    ground_active: AtomicBool, // continuous ground rumble active (>= end)
     ground_thump_active: AtomicBool, // in thump band [start,end)
-    taxi_start_crossed: AtomicBool,  // GS >= start
-    taxi_end_crossed: AtomicBool,    // GS >= end
+    taxi_start_crossed: AtomicBool, // GS >= start
+    taxi_end_crossed: AtomicBool, // GS >= end
     base_active: AtomicBool,
     bank_active: AtomicBool,
     stall_active: AtomicBool,
@@ -353,7 +349,7 @@ type EffectsShared = Arc<EffectsState>;
 // Tray → UI commands
 // -----------------------------
 #[derive(Debug, Clone, Copy)]
-enum UiCmd {
+pub enum UiCmd {
     Show,
     Hide,
     Toggle,
@@ -379,7 +375,6 @@ enum SimStatus {
     InFlight,
 }
 
-/// Small status/effect circle. Uses the given `color` for stroke; fills only if `filled` is true.
 fn circle_indicator_colored(ui: &mut egui::Ui, color: Color32, filled: bool) {
     let h = ui.style().spacing.interact_size.y.max(14.0);
     let (rect, _) = ui.allocate_exact_size(Vec2::new(h, h), egui::Sense::hover());
@@ -394,11 +389,8 @@ fn circle_indicator_colored(ui: &mut egui::Ui, color: Color32, filled: bool) {
 
 fn status_badge(ui: &mut egui::Ui, status: &SimStatus) {
     let (text, color, filled) = match status {
-        // red, hollow
         SimStatus::Disconnected => ("Disconnected", Color32::from_rgb(200, 60, 60), false),
-        // yellow, hollow
         SimStatus::Connected => ("Connected", Color32::from_rgb(220, 180, 40), false),
-        // green, filled
         SimStatus::InFlight => ("In Flight", Color32::from_rgb(30, 180, 90), true),
     };
     ui.horizontal(|ui| {
@@ -409,9 +401,9 @@ fn status_badge(ui: &mut egui::Ui, status: &SimStatus) {
 
 fn yoke_badge_dot(ui: &mut egui::Ui, connected: bool) {
     let (color, filled) = if connected {
-        (Color32::from_rgb(30, 180, 90), true) // green, filled
+        (Color32::from_rgb(30, 180, 90), true)
     } else {
-        (Color32::from_rgb(200, 60, 60), false) // red, hollow
+        (Color32::from_rgb(200, 60, 60), false)
     };
     ui.horizontal(|ui| {
         circle_indicator_colored(ui, color, filled);
@@ -619,10 +611,8 @@ impl eframe::App for UiState {
 
                 // Read current effects activation for indicator dots
                 let ground_active = self.effects.ground_active.load(Ordering::Relaxed);
-                let ground_thump_active =
-                    self.effects.ground_thump_active.load(Ordering::Relaxed);
-                let taxi_start_crossed =
-                    self.effects.taxi_start_crossed.load(Ordering::Relaxed);
+                let ground_thump_active = self.effects.ground_thump_active.load(Ordering::Relaxed);
+                let taxi_start_crossed = self.effects.taxi_start_crossed.load(Ordering::Relaxed);
                 let taxi_end_crossed = self.effects.taxi_end_crossed.load(Ordering::Relaxed);
 
                 self.config.with_mut(|cfg| {
@@ -815,17 +805,18 @@ impl eframe::App for UiState {
             match self.rx_ui.try_recv() {
                 Ok(cmd) => match cmd {
                     UiCmd::Show => {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        // Restore and bring it back
                         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                         ctx.request_repaint();
                     }
                     UiCmd::Hide => {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                     }
                     UiCmd::Toggle => {
-                        // If hidden/minimized, show; if visible and focused, hide
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        // A simple, robust toggle: always un-minimize & make visible
                         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                         ctx.request_repaint();
                     }
                     UiCmd::Stop => {
@@ -859,7 +850,7 @@ fn build_simapp_vibe_payload(intensity: u8) -> [u8; 14] {
 }
 
 // -----------------------------
-// HID worker — optimized idle CPU
+// HID worker
 // -----------------------------
 struct HidEntry {
     dev: HidDevice,
@@ -1038,10 +1029,7 @@ fn sim_worker(
                 if let Ok(c) = std::ffi::CString::new("Pause") {
                     let hr = sub(h_sc, EVT_PAUSE_SYS, c.as_ptr());
                     if hr < 0 {
-                        logs.push(format!(
-                            "SimConnect: subscribe Pause FAILED {}",
-                            hr_hex(hr)
-                        ));
+                        logs.push(format!("SimConnect: subscribe Pause FAILED {}", hr_hex(hr)));
                     }
                 }
                 if let Ok(c) = std::ffi::CString::new("Pause_EX1") {
@@ -1206,7 +1194,7 @@ fn sim_worker(
 
             // Pause state from events (more reliable than the simvar alone)
             let mut paused_event_flag: bool = false; // Pause (1/0)
-            let mut paused_ex1_bits: u32 = 0;        // Pause_EX1 flags
+            let mut paused_ex1_bits: u32 = 0; // Pause_EX1 flags
 
             loop {
                 let mut p_recv: *mut SimRecv = std::ptr::null_mut();
@@ -1298,10 +1286,10 @@ fn sim_worker(
                                         * 0.5)
                                         .clamp(0.0, 100.0), // %
                                     flaps_index: elem.get(5).copied().unwrap_or(0.0).round() as i32, // detent
-                                    gear_handle: elem.get(6).copied().unwrap_or(0.0),               // 0/1
-                                    stalled: elem.get(7).copied().unwrap_or(0.0) != 0.0,            // bool
-                                    sim_time_s: elem.get(8).copied().unwrap_or(0.0),                // s
-                                    ground_speed_kt: elem.get(9).copied().unwrap_or(0.0).max(0.0),  // kt
+                                    gear_handle: elem.get(6).copied().unwrap_or(0.0), // 0/1
+                                    stalled: elem.get(7).copied().unwrap_or(0.0) != 0.0, // bool
+                                    sim_time_s: elem.get(8).copied().unwrap_or(0.0),  // s
+                                    ground_speed_kt: elem.get(9).copied().unwrap_or(0.0).max(0.0), // kt
                                     paused: paused_from_events || paused_from_var,
                                 };
 
@@ -1369,11 +1357,11 @@ fn sim_worker(
 
                                 // Flaps bump — prefer HANDLE INDEX (robust per-step pulse).
                                 if fv.flaps_index != prev_flaps_idx {
-                                    let steps = (fv.flaps_index - prev_flaps_idx).abs().max(1)
-                                        as usize;
+                                    let steps =
+                                        (fv.flaps_index - prev_flaps_idx).abs().max(1) as usize;
                                     flap_t0 = fv.sim_time_s;
-                                    flap_t1 =
-                                        fv.sim_time_s + cfg_now.flaps_bump_duration_s * steps as f64;
+                                    flap_t1 = fv.sim_time_s
+                                        + cfg_now.flaps_bump_duration_s * steps as f64;
                                     flap_peak = cfg_now.flaps_peak as f64;
                                     prev_flaps_idx = fv.flaps_index;
                                 } else {
@@ -1425,8 +1413,7 @@ fn sim_worker(
                                     };
 
                                     // Amplitude ramps with t_norm
-                                    let amp =
-                                        (cfg_now.ground_roll as f64) * (0.35 + 0.65 * t_norm);
+                                    let amp = (cfg_now.ground_roll as f64) * (0.35 + 0.65 * t_norm);
 
                                     ground_term = thump_env * amp;
 
@@ -1483,8 +1470,8 @@ fn sim_worker(
                                     transients += flap_peak * (std::f64::consts::PI * phase).sin();
                                 }
                                 if gear_active {
-                                    let p =
-                                        ((fv.sim_time_s - gear_t0) / (gear_t1 - gear_t0)).clamp(0.0, 1.0);
+                                    let p = ((fv.sim_time_s - gear_t0) / (gear_t1 - gear_t0))
+                                        .clamp(0.0, 1.0);
                                     transients += gear_peak * (std::f64::consts::PI * p).sin();
                                 }
                                 effects
@@ -1547,98 +1534,6 @@ fn sim_worker(
 }
 
 // -----------------------------
-// Tray helpers
-// -----------------------------
-fn exe_dir() -> Option<PathBuf> {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|x| x.to_path_buf()))
-}
-
-fn load_tray_icon() -> Option<TrayIconImage> {
-    if let Ok(icon) = TrayIconImage::from_resource_name("MAINICON", None) {
-        return Some(icon);
-    }
-    if let Some(mut p) = exe_dir() {
-        p.push("assets");
-        p.push("icon.ico");
-        if p.exists() {
-            if let Ok(icon) = TrayIconImage::from_path(&p, None) {
-                return Some(icon);
-            }
-        }
-    }
-    if let Ok(icon) = TrayIconImage::from_path("assets/icon.ico", None) {
-        return Some(icon);
-    }
-    None
-}
-
-// -----------------------------
-// Tray thread (menu + icon clicks)
-// -----------------------------
-fn run_tray(tx_ui: Sender<UiCmd>) {
-    let icon = load_tray_icon();
-
-    // Menu
-    let menu = Menu::new();
-    let item_show = MenuItem::new("Show", true, None);
-    let item_hide = MenuItem::new("Hide", true, None);
-    let item_stop = MenuItem::new("Stop", true, None);
-    let item_resume = MenuItem::new("Resume", true, None);
-    let item_quit = MenuItem::new("Quit", true, None);
-    let _ = menu.append(&item_show);
-    let _ = menu.append(&item_hide);
-    let _ = menu.append(&item_stop);
-    let _ = menu.append(&item_resume);
-    let _ = menu.append(&item_quit);
-
-    // Keep a strong reference so the icon stays visible
-    let _tray: TrayIcon = TrayIconBuilder::new()
-        .with_menu(Box::new(menu))
-        .with_tooltip("Ursa Minor FFB")
-        .with_icon(icon.unwrap_or_else(|| {
-            // if no icon found, create a 1x1 transparent to satisfy API
-            TrayIconImage::from_rgba(vec![0, 0, 0, 0], 1, 1).unwrap()
-        }))
-        .build()
-        .expect("tray build");
-
-    // Receivers
-    let menu_rx = MenuEvent::receiver();
-    let click_rx = TrayIconEvent::receiver();
-
-    loop {
-        // Menu events
-        if let Ok(event) = menu_rx.try_recv() {
-            let _ = if event.id() == item_show.id() {
-                tx_ui.send(UiCmd::Show)
-            } else if event.id() == item_hide.id() {
-                tx_ui.send(UiCmd::Hide)
-            } else if event.id() == item_stop.id() {
-                tx_ui.send(UiCmd::Stop)
-            } else if event.id() == item_resume.id() {
-                tx_ui.send(UiCmd::Resume)
-            } else if event.id() == item_quit.id() {
-                tx_ui.send(UiCmd::Quit)
-            } else {
-                Ok(())
-            };
-        }
-
-        // Tray icon click events (field, not method)
-        if let Ok(ev) = click_rx.try_recv() {
-            if ev.click_type == ClickType::Left {
-                let _ = tx_ui.send(UiCmd::Toggle);
-            }
-        }
-
-        // avoid spin
-        thread::sleep(Duration::from_millis(30));
-    }
-}
-
-// -----------------------------
 // main
 // -----------------------------
 fn main() -> Result<()> {
@@ -1654,6 +1549,10 @@ fn main() -> Result<()> {
     let hold = Arc::new(AtomicBool::new(false));
     let status = Arc::new(Mutex::new(SimStatus::Disconnected));
     let aircraft_title = Arc::new(Mutex::new(String::new()));
+
+    if updater::early_self_update_hook() {
+        return Ok(());
+    }
 
     {
         let yoke_flag = yoke_connected.clone();
@@ -1687,13 +1586,6 @@ fn main() -> Result<()> {
         });
     }
 
-    // System tray thread
-    {
-        let tx = tx_ui.clone();
-        thread::spawn(move || run_tray(tx));
-    }
-
-    // Compact window, fixed small height; disable resize/maximize
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([420.0, 520.0])
@@ -1735,13 +1627,24 @@ fn main() -> Result<()> {
         hold,
 
         rx_ui,
-        tx_ui,
+        tx_ui: tx_ui.clone(),
     };
+
+    let tx_ui_tray = tx_ui.clone();
+    let app_for_creator = app;
 
     let run = eframe::run_native(
         "Ursa Minor FFB",
         native_options,
-        Box::new(|_cc| Box::new(app)),
+        Box::new(move |cc| {
+            // Spawn tray now that we have the egui context
+            tray::spawn_tray_with_ctx(
+                tx_ui_tray.clone(),
+                cc.egui_ctx.clone(),
+                env!("CARGO_PKG_VERSION"),
+            );
+            Box::new(app_for_creator)
+        }),
     );
 
     let _ = tx_hid.send(HidCmd::SendIntensity(0)); // silence on exit
