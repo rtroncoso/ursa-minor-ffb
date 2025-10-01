@@ -64,8 +64,8 @@ jobs:
 
           Write-Host "Found EXE: $exePath"
 
-          # Zip name: <repo>-<tag>-windows.zip (e.g. ursa-minor-ffb-v1.2.3-windows.zip)
-          $zipName = "$repo-$tag-windows.zip"
+          # Zip name: <repo>-<tag>-windows-x64.zip (e.g. ursa-minor-ffb-v1.2.3-windows-x64.zip)
+          $zipName = "$repo-$tag-windows-x64.zip"
           $zipPath = Join-Path $dist $zipName
 
           # Create a minimal bundle: just the EXE (rename inside zip to the nice BIN_NAME)

@@ -1,6 +1,6 @@
 [package]
 name = "ursa_minor_ffb"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2021"
 build = "src/build.rs"
 
@@ -18,7 +18,6 @@ rusb = "0.9"
 libloading = "0.8"
 
 # utils
-tray-icon = "0.13"
 crossbeam-channel = "0.5"
 parking_lot = "0.12"
 anyhow = "1.0"

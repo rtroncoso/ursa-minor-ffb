@@ -14,7 +14,7 @@ use serde_json::Value;
 use zip::ZipArchive;
 
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{HINSTANCE, HWND};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     MessageBoxW, IDOK, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_OKCANCEL, SW_SHOWNORMAL,
@@ -108,6 +108,7 @@ fn check_install_and_restart(hwnd: HWND, current_version: &str) -> Result<()> {
 fn fetch_latest_release() -> Result<(String, String, String, String)> {
     let client = reqwest::blocking::Client::builder()
         .user_agent(UA)
+        .timeout(Duration::from_secs(15))
         .build()?;
 
     let mut resp = client.get(LATEST_API).send()?;
@@ -183,6 +184,7 @@ fn is_newer(new_v: &str, cur_v: &str) -> bool {
 fn download_asset(url: &str, asset_name: &str) -> Result<PathBuf> {
     let client = reqwest::blocking::Client::builder()
         .user_agent(UA)
+        .timeout(Duration::from_secs(30))
         .build()?;
 
     let mut resp = client.get(url).send()?;
@@ -316,6 +318,7 @@ fn apply_update(app_dir: &Path, extracted_dir: &Path, new_exe_name: &OsStr) -> R
         }
     }
 
+    let _ = fs::remove_dir_all(extracted_dir);
     Ok(())
 }
 

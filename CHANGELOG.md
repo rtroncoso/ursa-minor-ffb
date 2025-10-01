@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.1.1
+
+- Effects for Flaps, Landing gear and Paused states
+- Fixes tray issues when interacting with context menu
+- Auto-updater reliability improvements
+
 ## v1.1.0
 
 - Improve effects for Flaps, Landing gear and Paused states
