@@ -18,12 +18,12 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    DispatchMessageW, FindWindowW, GetCursorPos, GetMessageW, LoadCursorW, RegisterClassW,
-    SetForegroundWindow, ShowWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
-    CW_USEDEFAULT, IDC_ARROW, IMAGE_ICON, LR_DEFAULTCOLOR, LR_SHARED, MENU_ITEM_FLAGS, MSG,
-    SHOW_WINDOW_CMD, SW_RESTORE, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON,
-    TRACK_POPUP_MENU_FLAGS, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP,
-    WM_RBUTTONUP, WM_USER, WNDCLASSW, WS_OVERLAPPED,
+    DispatchMessageW, FindWindowW, GetCursorPos, GetMessageW, LoadCursorW, PostQuitMessage,
+    RegisterClassW, SetForegroundWindow, ShowWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW,
+    CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW, IMAGE_ICON, LR_DEFAULTCOLOR, LR_SHARED, MENU_ITEM_FLAGS,
+    MSG, SHOW_WINDOW_CMD, SW_RESTORE, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, TRACK_POPUP_MENU_FLAGS, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY,
+    WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP, WM_USER, WNDCLASSW, WS_OVERLAPPED,
 };
 
 use crate::{updater, UiCmd};
@@ -142,7 +142,7 @@ unsafe extern "system" fn wnd_proc(
                     pt.y,
                     0,
                     hwnd,
-                    None::<*const RECT>, // <-- correct type for last arg
+                    None::<*const RECT>, // correct type
                 );
 
                 // Always destroy popup
@@ -154,30 +154,34 @@ unsafe extern "system" fn wnd_proc(
                 drop(guard); // release before acting
 
                 if cmd_id != 0 {
-                    let st = TRAY_STATE.get().unwrap().lock().unwrap();
+                    // Reacquire, but DO NOT call notify_held() while holding this lock.
+                    let mut st = TRAY_STATE.get().unwrap().lock().unwrap();
                     match cmd_id {
                         ID_TRAY_STOP_OR_RESUME => {
                             if st.is_held {
                                 let _ = st.tx_ui.send(UiCmd::Resume);
-                                notify_held(false);
+                                st.is_held = false; // update directly; avoid deadlock
                             } else {
                                 let _ = st.tx_ui.send(UiCmd::Stop);
-                                notify_held(true);
+                                st.is_held = true; // update directly; avoid deadlock
                             }
                         }
                         ID_TRAY_CHECK_UPDATES => {
                             updater::spawn_check(st.hwnd, st.version_str);
                         }
                         ID_TRAY_QUIT => {
-                            // Remove tray icon
+                            // 1) Remove tray icon
                             let mut nid = st.nid;
                             let _ = Shell_NotifyIconW(NIM_DELETE, &mut nid);
 
-                            // Tell eframe to close the main window
+                            // 2) Ask egui to close the main window
                             st.ctx.send_viewport_cmd(ViewportCommand::Close);
 
-                            // Destroy the tray window
+                            // 3) Destroy the tray window
                             let _ = DestroyWindow(hwnd);
+
+                            // 4) Exit the tray thread loop cleanly
+                            PostQuitMessage(0);
                         }
                         _ => {}
                     }
@@ -195,6 +199,8 @@ unsafe extern "system" fn wnd_proc(
                 let mut nid = st.nid;
                 let _ = Shell_NotifyIconW(NIM_DELETE, &mut nid);
             }
+            // Ensure the tray thread exits its message loop
+            PostQuitMessage(0);
             LRESULT(0)
         }
 
@@ -256,6 +262,7 @@ pub fn spawn_tray_with_ctx(tx_ui: Sender<UiCmd>, ctx: egui::Context, app_version
         nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         nid.uCallbackMessage = WM_TRAYICON;
         nid.hIcon = load_app_icon(hinst);
+        nid.uID = 1; // stable classic identity
 
         let tip = format!("Ursa Minor FFB v{}", app_version);
         let mut buf = [0u16; 128];

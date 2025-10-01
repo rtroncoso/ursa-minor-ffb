@@ -14,7 +14,7 @@ use serde_json::Value;
 use zip::ZipArchive;
 
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HINSTANCE, HWND};
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     MessageBoxW, IDOK, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_OKCANCEL, SW_SHOWNORMAL,
@@ -295,15 +295,25 @@ fn apply_update(app_dir: &Path, extracted_dir: &Path, new_exe_name: &OsStr) -> R
     let mut target = app_dir.to_path_buf();
     target.push(new_exe_name);
 
+    // Build a stable wide string that stays alive for the call.
+    let target_w = wide_os(target.as_os_str());
     unsafe {
-        let _ = ShellExecuteW(
+        let hinst = ShellExecuteW(
             None,
             w!("open"),
-            to_pcwstr(&target.to_string_lossy()),
+            PCWSTR(target_w.as_ptr()),
             PCWSTR::null(),
             PCWSTR::null(),
             SW_SHOWNORMAL,
         );
+        // Per Win32, return value <= 32 indicates failure.
+        if (hinst.0 as isize) <= 32 {
+            msgbox_raw(
+                "Launch failed",
+                &format!("ShellExecuteW failed to start:\n{}", target.display()),
+                true,
+            );
+        }
     }
 
     Ok(())
@@ -364,7 +374,7 @@ fn recursive_copy_overwrite(src: &Path, dst: &Path) -> Result<()> {
             if let Some(parent) = dp.parent() {
                 create_dir_all(parent)?;
             }
-            // Try atomic replace: rename temp into place
+            // Try atomic replace: copy to temp in the destination dir, then rename into place.
             let mut tmp = dp.clone();
             tmp.set_extension("updt");
             copy(&sp, &tmp)?;
@@ -380,11 +390,14 @@ fn recursive_copy_overwrite(src: &Path, dst: &Path) -> Result<()> {
 }
 
 fn confirm(hwnd: HWND, title: &str, text: &str) -> bool {
+    // Keep wide buffers alive across the call.
+    let title_w = wide_str(title);
+    let text_w = wide_str(text);
     unsafe {
         MessageBoxW(
             hwnd,
-            to_pcwstr(text),
-            to_pcwstr(title),
+            PCWSTR(text_w.as_ptr()),
+            PCWSTR(title_w.as_ptr()),
             MB_OKCANCEL | MB_ICONINFORMATION,
         ) == IDOK
     }
@@ -396,8 +409,10 @@ fn msgbox(hwnd: HWND, title: &str, text: &str, warn: bool) {
     } else {
         MB_OK | MB_ICONINFORMATION
     };
+    let title_w = wide_str(title);
+    let text_w = wide_str(text);
     unsafe {
-        let _ = MessageBoxW(hwnd, to_pcwstr(text), to_pcwstr(title), flags);
+        let _ = MessageBoxW(hwnd, PCWSTR(text_w.as_ptr()), PCWSTR(title_w.as_ptr()), flags);
     }
 }
 
@@ -405,12 +420,14 @@ fn msgbox_raw(title: &str, text: &str, warn: bool) {
     msgbox(HWND(0), title, text, warn);
 }
 
-fn to_pcwstr(s: &str) -> PCWSTR {
-    use std::ffi::OsStr;
+// --- Local wide-string helpers that keep storage alive for the Win32 calls ---
+
+fn wide_str(s: &str) -> Vec<u16> {
     use std::os::windows::ffi::OsStrExt;
-    let wide: Vec<u16> = OsStr::new(s)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    PCWSTR(wide.as_ptr())
+    OsStr::new(s).encode_wide().chain(Some(0)).collect()
+}
+
+fn wide_os(s: &OsStr) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    s.encode_wide().chain(Some(0)).collect()
 }

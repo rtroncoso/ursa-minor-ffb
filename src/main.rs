@@ -20,6 +20,8 @@ use egui_extras::{Column, TableBuilder};
 use hidapi::{HidApi, HidDevice};
 use libloading::Library;
 use parking_lot::Mutex;
+// ⬇ Added: HWND import to pass a parent handle to updater
+use windows::Win32::Foundation::HWND;
 
 // -----------------------------
 // Winwing IDs
@@ -573,6 +575,12 @@ impl eframe::App for UiState {
                 }
 
                 ui.separator();
+
+                // Check for updates button
+                if ui.button("🔄 Check for updates").clicked() {
+                    updater::spawn_check(HWND(0), env!("CARGO_PKG_VERSION"));
+                }
+
                 // Stop / Resume only (no minimize-to-tray anymore)
                 let holding = self.hold.load(Ordering::Relaxed);
                 if !holding {
@@ -585,9 +593,6 @@ impl eframe::App for UiState {
                     self.hold.store(false, Ordering::Relaxed);
                     let _ = self.tx_hid.send(HidCmd::SetHold(false));
                     tray::notify_held(false);
-                }
-                if holding {
-                    ui.colored_label(Color32::LIGHT_RED, "OUTPUT HELD");
                 }
             });
         });
@@ -1002,6 +1007,9 @@ fn sim_worker(
             *status.lock() = SimStatus::Connected;
             *aircraft_title.lock() = String::new();
 
+            // Track whether we are actually in a flight
+            let mut in_flight: bool = true;
+
             if let Some(sub) = fns.subscribe_event {
                 for (id, ev) in &[
                     (EVT_SIM_START, "SimStart"),
@@ -1205,7 +1213,31 @@ fn sim_worker(
                         }
                         SIMCONNECT_RECV_ID_EVENT => {
                             let ev = &*(p_recv as *const SimRecvEvent);
-                            if ev.u_event_id == EVT_PAUSE_SYS {
+
+                            if ev.u_event_id == EVT_SIM_START {
+                                in_flight = true;
+                                // clear stale vars/effects when a flight actually starts
+                                *last_vars.lock() = None;
+                                effects.flaps_bump_active.store(false, Ordering::Relaxed);
+                                effects.gear_bump_active.store(false, Ordering::Relaxed);
+                                effects.ground_active.store(false, Ordering::Relaxed);
+                                effects.ground_thump_active.store(false, Ordering::Relaxed);
+                                effects.base_active.store(false, Ordering::Relaxed);
+                                effects.bank_active.store(false, Ordering::Relaxed);
+                                effects.stall_active.store(false, Ordering::Relaxed);
+                            } else if ev.u_event_id == EVT_SIM_STOP {
+                                in_flight = false;
+                                // silence immediately when flight stops (menus/world map)
+                                let _ = tx_hid.send(HidCmd::SendIntensity(0));
+                                *last_vars.lock() = None;
+                                effects.flaps_bump_active.store(false, Ordering::Relaxed);
+                                effects.gear_bump_active.store(false, Ordering::Relaxed);
+                                effects.ground_active.store(false, Ordering::Relaxed);
+                                effects.ground_thump_active.store(false, Ordering::Relaxed);
+                                effects.base_active.store(false, Ordering::Relaxed);
+                                effects.bank_active.store(false, Ordering::Relaxed);
+                                effects.stall_active.store(false, Ordering::Relaxed);
+                            } else if ev.u_event_id == EVT_PAUSE_SYS {
                                 paused_event_flag = ev.dw_data != 0;
                             } else if ev.u_event_id == EVT_PAUSE_EX1_SYS {
                                 paused_ex1_bits = ev.dw_data;
@@ -1215,25 +1247,40 @@ fn sim_worker(
                             let sod = &*(p_recv as *const SimRecvSimObjectData);
                             let base_ptr = p_recv as *const u8;
                             let data_ptr = (&sod.dw_data as *const DWord) as *const u8;
-                            let header_bytes =
-                                (data_ptr as usize).saturating_sub(base_ptr as usize);
+                            let header_bytes = (data_ptr as usize).saturating_sub(base_ptr as usize);
                             let payload_len = (cb as usize).saturating_sub(header_bytes);
 
                             if sod.dw_request_id == REQ_TITLE {
+                                // Always allow TITLE to update (even in menus)
                                 if payload_len >= 256 {
                                     let s_ptr = data_ptr as *const c_char;
-                                    let title =
-                                        CStr::from_ptr(s_ptr).to_string_lossy().into_owned();
+                                    let title = CStr::from_ptr(s_ptr).to_string_lossy().into_owned();
                                     *aircraft_title.lock() = title;
                                 }
-                            } else if sod.dw_request_id == REQ_MAIN {
+                                continue;
+                            }
+
+                            if sod.dw_request_id == REQ_MAIN {
                                 main_seen = true;
                                 last_main_rx = Instant::now();
 
-                                let count = sod.dw_define_count as usize;
-                                if count == 0 {
+                                // If we've definitively seen SimStop, treat as "menus" and suppress output/UI vars.
+                                if !in_flight {
+                                    *status.lock() = SimStatus::Connected;
+                                    *last_vars.lock() = None;
+                                    let _ = tx_hid.send(HidCmd::SendIntensity(0));
+                                    effects.flaps_bump_active.store(false, Ordering::Relaxed);
+                                    effects.gear_bump_active.store(false, Ordering::Relaxed);
+                                    effects.ground_active.store(false, Ordering::Relaxed);
+                                    effects.ground_thump_active.store(false, Ordering::Relaxed);
+                                    effects.base_active.store(false, Ordering::Relaxed);
+                                    effects.bank_active.store(false, Ordering::Relaxed);
+                                    effects.stall_active.store(false, Ordering::Relaxed);
                                     continue;
                                 }
+
+                                let count = sod.dw_define_count as usize;
+                                if count == 0 { continue; }
 
                                 // Detect element width
                                 let want_f64 = payload_len >= count * 8;
@@ -1580,8 +1627,8 @@ fn main() -> Result<()> {
     // Compact window; disable resize/maximize
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([420.0, 520.0])
-            .with_min_inner_size([360.0, 420.0])
+            .with_inner_size([478.0, 520.0])
+            .with_min_inner_size([400.0, 420.0])
             .with_resizable(false)
             .with_maximize_button(false)
             .with_minimize_button(true),
