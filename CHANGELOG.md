@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.1.2
+
+- Fixes SimConnect issues for users that weren't able to connect to the sim
+
 ## v1.1.1
 
 - Effects for Flaps, Landing gear and Paused states
