@@ -27,14 +27,25 @@ const UA: &str = "UrsaMinorFFB-Updater (+https://github.com/rtroncoso/ursa-minor
 /// helper mode it will perform the update and then relaunch the app.
 /// Returns true if the helper ran and the process should exit immediately.
 pub fn early_self_update_hook() -> bool {
-    // Args:  --apply-update <app_dir> <extracted_dir> <new_exe_name>
+    // Args:  --apply-update <app_dir> <extracted_dir> <new_exe_name> [--elevated]
     let mut args = std::env::args_os();
     if let Some(first) = args.nth(1) {
         if first == "--apply-update" {
             let app_dir = args.next().expect("missing app_dir");
             let extract = args.next().expect("missing extracted_dir");
             let exe_name = args.next().expect("missing exe_name");
-            if let Err(e) = apply_update(Path::new(&app_dir), Path::new(&extract), &exe_name) {
+            let mut elevated = false;
+            if let Some(flag) = args.next() {
+                if flag == "--elevated" {
+                    elevated = true;
+                }
+            }
+            if let Err(e) = apply_update(
+                Path::new(&app_dir),
+                Path::new(&extract),
+                &exe_name,
+                elevated,
+            ) {
                 // Last-chance message box (no parent HWND here)
                 msgbox_raw("Update failed", &format!("{e:#}"), true);
             }
@@ -44,13 +55,7 @@ pub fn early_self_update_hook() -> bool {
     false
 }
 
-/// Spawns a background thread that:
-/// 1) queries GitHub latest release
-/// 2) compares with `current_version`
-/// 3) prompts user (MessageBox) if newer is available
-/// 4) downloads & extracts the .zip to a temp dir
-/// 5) copies the running EXE to temp as a helper and asks it to apply the update
-/// 6) terminates the current process so the helper can replace files
+/// Spawns a background thread that checks + prompts + downloads + launches helper.
 pub fn spawn_check(hwnd_parent: HWND, current_version: &str) {
     let current = current_version.to_string();
     thread::spawn(move || {
@@ -96,7 +101,6 @@ fn check_install_and_restart(hwnd: HWND, current_version: &str) -> Result<()> {
     // Prepare helper copy of the current EXE (so we can replace the real one)
     let current_exe = std::env::current_exe().context("current_exe()")?;
     let app_dir = current_exe.parent().unwrap().to_path_buf();
-
     let helper_path = copy_self_to_temp_helper(&current_exe)?;
 
     // Launch helper: it will wait, copy files, then relaunch the new EXE.
@@ -108,7 +112,6 @@ fn check_install_and_restart(hwnd: HWND, current_version: &str) -> Result<()> {
 fn fetch_latest_release() -> Result<(String, String, String, String)> {
     let client = reqwest::blocking::Client::builder()
         .user_agent(UA)
-        .timeout(Duration::from_secs(15))
         .build()?;
 
     let mut resp = client.get(LATEST_API).send()?;
@@ -184,7 +187,6 @@ fn is_newer(new_v: &str, cur_v: &str) -> bool {
 fn download_asset(url: &str, asset_name: &str) -> Result<PathBuf> {
     let client = reqwest::blocking::Client::builder()
         .user_agent(UA)
-        .timeout(Duration::from_secs(30))
         .build()?;
 
     let mut resp = client.get(url).send()?;
@@ -213,7 +215,6 @@ fn extract_zip(zip_path: &Path) -> Result<PathBuf> {
 }
 
 fn find_new_exe_name(extracted_dir: &Path) -> Result<PathBuf> {
-    // Find the first *.exe in the extracted tree that looks like our app.
     let mut candidates: Vec<PathBuf> = vec![];
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
         for e in read_dir(dir)? {
@@ -271,7 +272,6 @@ fn launch_helper_and_exit(
 
     let _ = cmd.spawn().context("spawn helper")?;
 
-    // Tell the user and exit the whole process so files can be replaced.
     msgbox(
         HWND(0),
         "Updating",
@@ -279,15 +279,33 @@ fn launch_helper_and_exit(
         false,
     );
 
-    // Give the UI a breath, then terminate the process.
     thread::sleep(Duration::from_millis(200));
     std::process::exit(0);
 }
 
-/// Runs in the helper copy. Waits until files can be replaced, then
-/// copies everything from `extracted_dir` into `app_dir` (overwriting),
-/// launches the new EXE, and exits.
-fn apply_update(app_dir: &Path, extracted_dir: &Path, new_exe_name: &OsStr) -> Result<()> {
+/// Runs in the helper copy. If the app directory is protected, we auto-elevate
+/// (UAC) and continue the update from the elevated helper.
+fn apply_update(
+    app_dir: &Path,
+    extracted_dir: &Path,
+    new_exe_name: &OsStr,
+    elevated: bool,
+) -> Result<()> {
+    // If not already elevated, check writability and request elevation if needed.
+    if !elevated {
+        match can_write_dir(app_dir) {
+            Ok(true) => { /* fine */ }
+            Ok(false) => {
+                // Ask for elevation and re-run this helper with --elevated
+                relaunch_self_elevated(app_dir, extracted_dir, new_exe_name)?;
+                return Ok(()); // this (non-elevated) helper exits; elevated one takes over
+            }
+            Err(_) => {
+                // Unknown error probing — keep going and let the normal logic handle it.
+            }
+        }
+    }
+
     wait_for_writable(app_dir, Duration::from_secs(30))?;
 
     // Copy all files from extracted_dir into app_dir
@@ -308,25 +326,69 @@ fn apply_update(app_dir: &Path, extracted_dir: &Path, new_exe_name: &OsStr) -> R
             PCWSTR::null(),
             SW_SHOWNORMAL,
         );
-        // Per Win32, return value <= 32 indicates failure.
         if (hinst.0 as isize) <= 32 {
             msgbox_raw(
                 "Launch failed",
-                &format!("ShellExecuteW failed to start:\n{}", target.display()),
+                &format!("Could not start:\n{}", target.display()),
                 true,
             );
         }
     }
 
-    let _ = fs::remove_dir_all(extracted_dir);
+    Ok(())
+}
+
+fn can_write_dir(dir: &Path) -> io::Result<bool> {
+    let probe = dir.join(".__ursa_write_test.tmp");
+    match File::create(&probe) {
+        Ok(_) => {
+            let _ = fs::remove_file(&probe);
+            Ok(true)
+        }
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+fn relaunch_self_elevated(
+    app_dir: &Path,
+    extracted_dir: &Path,
+    new_exe_name: &OsStr,
+) -> Result<()> {
+    let me = std::env::current_exe().context("current_exe()")?;
+    let params = format!(
+        "--apply-update \"{}\" \"{}\" \"{}\" --elevated",
+        app_dir.display(),
+        extracted_dir.display(),
+        PathBuf::from(new_exe_name).display()
+    );
+    let params_w = wide_str(&params);
+    let me_w = wide_os(me.as_os_str());
+    unsafe {
+        let h = ShellExecuteW(
+            None,
+            w!("runas"),
+            PCWSTR(me_w.as_ptr()),
+            PCWSTR(params_w.as_ptr()),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        );
+        if (h.0 as isize) <= 32 {
+            msgbox_raw(
+                "Administrator permission required",
+                "The app is installed in a protected folder (e.g., Program Files).\n\
+                    To update, click Yes on the elevation prompt, or move the app to a writable folder (e.g., Documents) and try again.",
+                true,
+            );
+            bail!("User denied elevation or ShellExecuteW(runas) failed");
+        }
+    }
     Ok(())
 }
 
 fn wait_for_writable(app_dir: &Path, timeout: Duration) -> Result<()> {
-    // We try to rename the main exe briefly to detect locks; if locked, keep retrying.
     let start = Instant::now();
 
-    // Try to find any .exe in app_dir (prefer the current running name if exists)
     let try_exes: Vec<PathBuf> = read_dir(app_dir)?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
@@ -381,9 +443,7 @@ fn recursive_copy_overwrite(src: &Path, dst: &Path) -> Result<()> {
             let mut tmp = dp.clone();
             tmp.set_extension("updt");
             copy(&sp, &tmp)?;
-            // On Windows, rename over an existing file replaces it.
             let _ = fs::rename(&tmp, &dp).or_else(|_| {
-                // Fallback: remove then rename
                 let _ = fs::remove_file(&dp);
                 fs::rename(&tmp, &dp)
             })?;
@@ -393,7 +453,6 @@ fn recursive_copy_overwrite(src: &Path, dst: &Path) -> Result<()> {
 }
 
 fn confirm(hwnd: HWND, title: &str, text: &str) -> bool {
-    // Keep wide buffers alive across the call.
     let title_w = wide_str(title);
     let text_w = wide_str(text);
     unsafe {
@@ -415,7 +474,12 @@ fn msgbox(hwnd: HWND, title: &str, text: &str, warn: bool) {
     let title_w = wide_str(title);
     let text_w = wide_str(text);
     unsafe {
-        let _ = MessageBoxW(hwnd, PCWSTR(text_w.as_ptr()), PCWSTR(title_w.as_ptr()), flags);
+        let _ = MessageBoxW(
+            hwnd,
+            PCWSTR(text_w.as_ptr()),
+            PCWSTR(title_w.as_ptr()),
+            flags,
+        );
     }
 }
 

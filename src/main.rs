@@ -313,10 +313,7 @@ impl LogBuffer {
     }
 
     fn attach_file_at(&self, path: &PathBuf) -> std::io::Result<()> {
-        let f = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)?;
+        let f = OpenOptions::new().create(true).append(true).open(path)?;
         // Write a small session header
         {
             let mut fg = self.file.lock();
@@ -458,10 +455,10 @@ impl ConfigShared {
 struct EffectsState {
     flaps_bump_active: AtomicBool,
     gear_bump_active: AtomicBool,
-    ground_active: AtomicBool,       // continuous ground rumble active (>= end)
+    ground_active: AtomicBool, // continuous ground rumble active (>= end)
     ground_thump_active: AtomicBool, // in thump band [start,end)
-    taxi_start_crossed: AtomicBool,  // GS >= start
-    taxi_end_crossed: AtomicBool,    // GS >= end
+    taxi_start_crossed: AtomicBool, // GS >= start
+    taxi_end_crossed: AtomicBool, // GS >= end
     base_active: AtomicBool,
     bank_active: AtomicBool,
     stall_active: AtomicBool,
@@ -1372,14 +1369,16 @@ fn sim_worker(
                             let sod = &*(p_recv as *const SimRecvSimObjectData);
                             let base_ptr = p_recv as *const u8;
                             let data_ptr = (&sod.dw_data as *const DWord) as *const u8;
-                            let header_bytes = (data_ptr as usize).saturating_sub(base_ptr as usize);
+                            let header_bytes =
+                                (data_ptr as usize).saturating_sub(base_ptr as usize);
                             let payload_len = (cb as usize).saturating_sub(header_bytes);
 
                             if sod.dw_request_id == REQ_TITLE {
                                 // Always allow TITLE to update (even in menus)
                                 if payload_len >= 256 {
                                     let s_ptr = data_ptr as *const c_char;
-                                    let title = CStr::from_ptr(s_ptr).to_string_lossy().into_owned();
+                                    let title =
+                                        CStr::from_ptr(s_ptr).to_string_lossy().into_owned();
                                     *aircraft_title.lock() = title;
                                 }
                                 continue;
@@ -1405,7 +1404,9 @@ fn sim_worker(
                                 }
 
                                 let count = sod.dw_define_count as usize;
-                                if count == 0 { continue; }
+                                if count == 0 {
+                                    continue;
+                                }
 
                                 // Detect element width
                                 let want_f64 = payload_len >= count * 8;
