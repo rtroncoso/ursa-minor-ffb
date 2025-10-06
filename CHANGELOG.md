@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.1.3
+
+- Fixes auto-updater helper: Runs in elevated mode if needed
+
 ## v1.1.2
 
 - Fixes SimConnect issues for users that weren't able to connect to the sim
