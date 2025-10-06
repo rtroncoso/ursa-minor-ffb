@@ -5,6 +5,9 @@ mod updater;
 
 use std::collections::HashSet;
 use std::ffi::{c_char, c_void, CStr};
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
@@ -20,7 +23,7 @@ use egui_extras::{Column, TableBuilder};
 use hidapi::{HidApi, HidDevice};
 use libloading::Library;
 use parking_lot::Mutex;
-// ⬇ Added: HWND import to pass a parent handle to updater
+// HWND for updater button
 use windows::Win32::Foundation::HWND;
 
 // -----------------------------
@@ -163,12 +166,37 @@ struct SimConnectFns {
     subscribe_event: Option<PfnSimConnectSubscribeToSystemEvent>,
 }
 
-fn load_simconnect() -> Result<SimConnectFns> {
-    let lib = unsafe {
-        Library::new("SimConnect.dll")
-            .or_else(|_| Library::new(r"C:\\Windows\\System32\\SimConnect.dll"))
-            .context("Load SimConnect.dll failed")?
-    };
+// ---------- Embedded SimConnect fallback ----------
+// Always embed x64 SimConnect.dll from repo path: lib/SimConnect.dll
+// (build will fail if the file is missing, which is what we want)
+const EMBED_SIMCONNECT_BYTES: &[u8] =
+    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/lib/SimConnect.dll"));
+
+fn try_load_embedded_simconnect(logs: &LogBuffer) -> Result<Library> {
+    // Write the embedded DLL to %TEMP% and load it from there so Windows can map it.
+    let mut dst = std::env::temp_dir();
+    dst.push("ursa-simconnect-embedded-64.dll");
+
+    logs.push(format!(
+        "SimConnect: writing embedded DLL to {}",
+        dst.display()
+    ));
+    std::fs::write(&dst, EMBED_SIMCONNECT_BYTES)
+        .with_context(|| format!("write {}", dst.display()))?;
+
+    logs.push(format!(
+        "SimConnect: loading embedded DLL from {}",
+        dst.display()
+    ));
+    // SAFETY: Loading a DLL is the intended use of libloading.
+    let lib = unsafe { Library::new(&dst) }
+        .with_context(|| format!("Library::new({})", dst.display()))?;
+
+    logs.push("SimConnect: embedded DLL loaded successfully");
+    Ok(lib)
+}
+
+fn bind_simconnect(lib: Library) -> Result<SimConnectFns> {
     unsafe {
         let open: PfnSimConnectOpen = *lib.get(b"SimConnect_Open\0")?;
         let close: PfnSimConnectClose = *lib.get(b"SimConnect_Close\0")?;
@@ -184,7 +212,7 @@ fn load_simconnect() -> Result<SimConnectFns> {
             .map(|s| *s);
 
         Ok(SimConnectFns {
-            _lib: Arc::new(lib),
+            _lib: std::sync::Arc::new(lib),
             open,
             close,
             add_to_def,
@@ -195,25 +223,118 @@ fn load_simconnect() -> Result<SimConnectFns> {
     }
 }
 
+// Try normal search (EXE dir / PATH), then embedded fallback with detailed logs.
+fn load_simconnect(logs: &LogBuffer) -> Result<SimConnectFns> {
+    logs.push("SimConnect: trying normal load (EXE dir / PATH)...");
+    match unsafe { Library::new("SimConnect.dll") } {
+        Ok(lib) => {
+            logs.push("SimConnect: loaded via normal search");
+            return bind_simconnect(lib);
+        }
+        Err(e) => {
+            logs.push(format!("SimConnect: normal search failed: {e}"));
+        }
+    }
+
+    // Embedded fallback with explicit write/load logging above
+    let lib = try_load_embedded_simconnect(logs)
+        .context("embedded SimConnect fallback was unavailable or failed to load")?;
+    bind_simconnect(lib)
+}
+
 // -----------------------------
 // Logging
 // -----------------------------
-#[derive(Default, Clone)]
+#[derive(Clone)]
 struct LogBuffer {
     inner: Arc<Mutex<Vec<String>>>,
+    file: Arc<Mutex<Option<File>>>,
 }
-impl LogBuffer {
-    fn push(&self, s: impl Into<String>) {
-        let mut g = self.inner.lock();
-        g.push(s.into());
-        let len = g.len();
-        if len > 3000 {
-            g.drain(0..(len - 3000));
+
+impl Default for LogBuffer {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(Vec::new())),
+            file: Arc::new(Mutex::new(None)),
         }
     }
+}
+
+impl LogBuffer {
+    fn push(&self, s: impl Into<String>) {
+        let line = Self::stamp(s.into());
+        {
+            let mut g = self.inner.lock();
+            g.push(line.clone());
+            let len = g.len();
+            if len > 3000 {
+                g.drain(0..(len - 3000));
+            }
+        }
+        // Also write to file if configured
+        if let Some(f) = &mut *self.file.lock() {
+            let _ = writeln!(f, "{}", line);
+            let _ = f.flush();
+        }
+    }
+
     #[allow(dead_code)]
     fn snapshot(&self) -> Vec<String> {
         self.inner.lock().clone()
+    }
+
+    /// Initialize file logging, preferring the EXE directory.
+    /// Returns the chosen path on success.
+    fn try_init_file_prefer_exe_dir(&self) -> std::io::Result<PathBuf> {
+        // 1) Try "<exe dir>/UrsaMinorFFB.log"
+        if let Ok(p) = std::env::current_exe() {
+            if let Some(dir) = p.parent() {
+                let mut log_path = dir.to_path_buf();
+                log_path.push("UrsaMinorFFB.log");
+                if self.attach_file_at(&log_path).is_ok() {
+                    return Ok(log_path);
+                }
+            }
+        }
+        // 2) Fallback: %LOCALAPPDATA%\UrsaMinorFFB\UrsaMinorFFB.log
+        if let Some(base) = std::env::var_os("LOCALAPPDATA") {
+            let mut p = PathBuf::from(base);
+            p.push("UrsaMinorFFB");
+            let _ = std::fs::create_dir_all(&p);
+            p.push("UrsaMinorFFB.log");
+            self.attach_file_at(&p)?; // propagate error if this fails too
+            return Ok(p);
+        }
+        // 3) Last resort: %TEMP%\UrsaMinorFFB.log
+        let mut p = std::env::temp_dir();
+        p.push("UrsaMinorFFB.log");
+        self.attach_file_at(&p)?; // propagate error if this fails too
+        Ok(p)
+    }
+
+    fn attach_file_at(&self, path: &PathBuf) -> std::io::Result<()> {
+        let f = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        // Write a small session header
+        {
+            let mut fg = self.file.lock();
+            *fg = Some(f);
+        }
+        self.push(format!(
+            "==== session start: v{} pid={} ====",
+            env!("CARGO_PKG_VERSION"),
+            std::process::id()
+        ));
+        Ok(())
+    }
+
+    #[inline]
+    fn stamp(msg: String) -> String {
+        // chrono is already in your Cargo.toml
+        let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+        format!("[{}] {}", ts, msg)
     }
 }
 
@@ -337,10 +458,10 @@ impl ConfigShared {
 struct EffectsState {
     flaps_bump_active: AtomicBool,
     gear_bump_active: AtomicBool,
-    ground_active: AtomicBool, // continuous ground rumble active (>= end)
+    ground_active: AtomicBool,       // continuous ground rumble active (>= end)
     ground_thump_active: AtomicBool, // in thump band [start,end)
-    taxi_start_crossed: AtomicBool, // GS >= start
-    taxi_end_crossed: AtomicBool, // GS >= end
+    taxi_start_crossed: AtomicBool,  // GS >= start
+    taxi_end_crossed: AtomicBool,    // GS >= end
     base_active: AtomicBool,
     bank_active: AtomicBool,
     stall_active: AtomicBool,
@@ -978,8 +1099,12 @@ fn sim_worker(
     aircraft_title: Arc<Mutex<String>>,
 ) {
     logs.push("SimConnect: worker started");
-    let fns = match load_simconnect() {
-        Ok(f) => f,
+
+    let fns = match load_simconnect(&logs) {
+        Ok(f) => {
+            logs.push("SimConnect: loaded (normal search or embedded fallback)");
+            f
+        }
         Err(e) => {
             logs.push(format!("SimConnect: {}", e));
             return;
@@ -1585,12 +1710,17 @@ fn main() -> Result<()> {
     let controller_connected = Arc::new(AtomicBool::new(false));
     let sim_connected = Arc::new(AtomicBool::new(false));
     let last_vars = Arc::new(Mutex::new(None::<FlightVars>));
-    let logs = LogBuffer::default();
     let config = Arc::new(ConfigShared::new());
     let effects: EffectsShared = Arc::new(EffectsState::default());
     let hold = Arc::new(AtomicBool::new(false));
     let status = Arc::new(Mutex::new(SimStatus::Disconnected));
     let aircraft_title = Arc::new(Mutex::new(String::new()));
+    let logs = LogBuffer::default();
+
+    match logs.try_init_file_prefer_exe_dir() {
+        Ok(p) => logs.push(format!("File logging enabled → {}", p.display())),
+        Err(e) => logs.push(format!("File logging disabled: {}", e)),
+    }
 
     {
         let controller_flag = controller_connected.clone();
