@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.1.4
+
+- Add better logging for HID worker
+
 ## v1.1.3
 
 - Fixes auto-updater helper: Runs in elevated mode if needed
