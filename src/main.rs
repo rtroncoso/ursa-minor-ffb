@@ -977,28 +977,42 @@ struct HidEntry {
     usage: u16,
 }
 
-fn hid_send_out(devs: &Vec<HidEntry>, intensity: u8) -> usize {
+fn hid_send_out(devs: &Vec<HidEntry>, intensity: u8, logs: &LogBuffer) -> (usize, usize) {
     let pkt = build_simapp_vibe_payload(intensity);
     let mut ok = 0usize;
+    let mut fail = 0usize;
     for d in devs {
-        if d.dev.write(&pkt).is_ok() {
-            ok += 1;
+        match d.dev.write(&pkt) {
+            Ok(_) => ok += 1,
+            Err(e) => {
+                fail += 1;
+                logs.push(format!(
+                    "HID: write FAILED (if#{}, usage_page=0x{:04X}, usage=0x{:04X}) path='{}': {}",
+                    d.ifnum, d.usage_page, d.usage, d.path, e
+                ));
+            }
         }
     }
-    ok
+    (ok, fail)
 }
 
-fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, _logs: LogBuffer) {
+fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, logs: LogBuffer) {
+    logs.push("HID: worker starting…");
     let mut api = match HidApi::new() {
-        Ok(a) => a,
-        Err(_) => {
+        Ok(a) => {
+            logs.push("HID: HidApi initialized");
+            a
+        }
+        Err(e) => {
+            logs.push(format!("HID: HidApi::new FAILED: {}", e));
             return;
         }
     };
 
     let mut devices: Vec<HidEntry> = vec![];
     let mut last_scan = Instant::now() - Duration::from_secs(10);
-    let mut seen_paths: HashSet<String> = HashSet::new();
+    let mut last_status_log = Instant::now() - Duration::from_secs(10);
+    let mut last_missing_log = Instant::now() - Duration::from_secs(10);
 
     const SEND_INTERVAL: Duration = Duration::from_millis(50); // 20 Hz when active
 
@@ -1008,32 +1022,70 @@ fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, _logs
     let mut hold: bool = false;
 
     let mut ensure_open = |api: &mut HidApi, devices: &mut Vec<HidEntry>| {
+        // Only rescan every ~2s unless we have none.
         if last_scan.elapsed() < Duration::from_secs(2) && !devices.is_empty() {
             return;
         }
+
+        // Snapshot old paths to report adds/removes
+        let old_paths: std::collections::HashSet<String> =
+            devices.iter().map(|d| d.path.clone()).collect();
+
         devices.clear();
-        api.refresh_devices().ok();
+        if let Err(e) = api.refresh_devices() {
+            logs.push(format!("HID: refresh_devices FAILED: {}", e));
+        }
+
+        // Track additions/removals for logging
+        let mut new_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for devinfo in api.device_list() {
             if devinfo.vendor_id() == WW_VID {
-                if let Ok(d) = devinfo.open_device(api) {
-                    let path = devinfo.path().to_string_lossy().to_string();
-                    let usage_page: u16 = devinfo.usage_page();
-                    let usage: u16 = devinfo.usage();
-                    let ifnum: i32 = devinfo.interface_number();
-                    if seen_paths.insert(path.clone()) {
-                        // quiet logs
+                // Try opening; log success/failure with details
+                let path = devinfo.path().to_string_lossy().to_string();
+                let pid = devinfo.product_id();
+                let ifnum: i32 = devinfo.interface_number();
+                let usage_page: u16 = devinfo.usage_page();
+                let usage: u16 = devinfo.usage();
+
+                match devinfo.open_device(api) {
+                    Ok(d) => {
+                        devices.push(HidEntry {
+                            dev: d,
+                            path: path.clone(),
+                            ifnum,
+                            usage_page,
+                            usage,
+                        });
+                        new_paths.insert(path.clone());
+
+                        if !old_paths.contains(&path) {
+                            logs.push(format!(
+                                "HID: device OPENED (VID=0x{:04X}, PID=0x{:04X}, if#{}, usage_page=0x{:04X}, usage=0x{:04X}) path='{}'",
+                                WW_VID, pid, ifnum, usage_page, usage, path
+                            ));
+                        }
                     }
-                    devices.push(HidEntry {
-                        dev: d,
-                        path,
-                        ifnum,
-                        usage_page,
-                        usage,
-                    });
+                    Err(e) => {
+                        logs.push(format!(
+                            "HID: open FAILED (VID=0x{:04X}, PID=0x{:04X}, if#{}, usage_page=0x{:04X}, usage=0x{:04X}) path='{}': {}",
+                            WW_VID, pid, ifnum, usage_page, usage, path, e
+                        ));
+                    }
                 }
             }
         }
+
+        // Log removed devices
+        for p in old_paths.difference(&new_paths) {
+            logs.push(format!("HID: device REMOVED path='{}'", p));
+        }
+        // If nothing found, gently remind every few seconds
+        if new_paths.is_empty() && last_missing_log.elapsed() > Duration::from_secs(5) {
+            logs.push("HID: no Winwing devices found (VID=0x4098)".to_string());
+            last_missing_log = Instant::now();
+        }
+
         controller_connected.store(!devices.is_empty(), Ordering::Relaxed);
         last_scan = Instant::now();
     };
@@ -1042,30 +1094,52 @@ fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, _logs
 
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(cmd) => match cmd {
-                HidCmd::SendIntensity(level) => desired_intensity = level,
-                HidCmd::SendRaw(bytes) => {
-                    for d in &devices {
-                        let _ = d.dev.write(&bytes);
+            Ok(cmd) => {
+                match cmd {
+                    HidCmd::SendIntensity(level) => {
+                        desired_intensity = level;
+                        // Only log large changes to avoid spam
+                        if (i16::from(desired_intensity) - i16::from(last_sent_intensity)).abs()
+                            >= 15
+                        {
+                            logs.push(format!("HID: cmd SendIntensity({})", desired_intensity));
+                        }
+                    }
+                    HidCmd::SendRaw(bytes) => {
+                        logs.push(format!("HID: cmd SendRaw(len={})", bytes.len()));
+                        for d in &devices {
+                            if let Err(e) = d.dev.write(&bytes) {
+                                logs.push(format!(
+                                    "HID: raw write FAILED (if#{}, usage_page=0x{:04X}, usage=0x{:04X}) path='{}': {}",
+                                    d.ifnum, d.usage_page, d.usage, d.path, e
+                                ));
+                            }
+                        }
+                    }
+                    HidCmd::StopAll => {
+                        logs.push("HID: cmd StopAll");
+                        desired_intensity = 0;
+                        last_send = Instant::now() - SEND_INTERVAL;
+                    }
+                    HidCmd::SetHold(x) => {
+                        hold = x;
+                        logs.push(format!("HID: cmd SetHold({})", hold));
+                        if hold {
+                            let (_ok, _fail) = hid_send_out(&devices, 0, &logs);
+                            last_sent_intensity = 0;
+                        }
+                    }
+                    HidCmd::ReopenDevices => {
+                        logs.push("HID: cmd ReopenDevices");
+                        ensure_open(&mut api, &mut devices);
                     }
                 }
-                HidCmd::StopAll => {
-                    desired_intensity = 0;
-                    last_send = Instant::now() - SEND_INTERVAL;
-                }
-                HidCmd::SetHold(x) => {
-                    hold = x;
-                    if hold {
-                        let _ = hid_send_out(&devices, 0);
-                        last_sent_intensity = 0;
-                    }
-                }
-                HidCmd::ReopenDevices => {
-                    ensure_open(&mut api, &mut devices);
-                }
-            },
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
-            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => { /* idle */ }
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                logs.push("HID: channel disconnected → worker exit");
+                break;
+            }
         }
 
         ensure_open(&mut api, &mut devices);
@@ -1073,7 +1147,25 @@ fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, _logs
         if last_send.elapsed() >= SEND_INTERVAL {
             let out = if hold { 0 } else { desired_intensity };
             if out != last_sent_intensity {
-                let _ = hid_send_out(&devices, out);
+                let (ok, fail) = hid_send_out(&devices, out, &logs);
+
+                // Rate-limit the status line unless there's an error or zero writes.
+                let now = Instant::now();
+                if fail > 0
+                    || ok == 0
+                    || now.duration_since(last_status_log) > Duration::from_millis(900)
+                {
+                    logs.push(format!(
+                        "HID: send intensity {} → ok={} fail={} (devs={}, hold={})",
+                        out,
+                        ok,
+                        fail,
+                        devices.len(),
+                        hold
+                    ));
+                    last_status_log = now;
+                }
+
                 last_sent_intensity = out;
             }
             last_send = Instant::now();
