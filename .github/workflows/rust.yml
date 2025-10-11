@@ -47,7 +47,8 @@ jobs:
           $binDashed = ($env:BIN_NAME -replace '[^\w\-]', '-').ToLower()
           $candidates = @(
             "target\release\$binDashed.exe",
-            "target\release\$($env:BIN_NAME).exe"
+            "target\release\$($env:BIN_NAME).exe",
+            "target\release\ursa_minor_ffb.exe"
           )
 
           $exePath = $null

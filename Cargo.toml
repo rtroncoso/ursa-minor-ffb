@@ -12,7 +12,6 @@ egui_extras = "0.27"
 
 # HID
 hidapi = "2.6"
-rusb = "0.9"
 
 # DLL loader for SimConnect
 libloading = "0.8"
@@ -22,7 +21,6 @@ crossbeam-channel = "0.5"
 parking_lot = "0.12"
 anyhow = "1.0"
 thiserror = "1.0"
-instant = "0.1"
 reqwest = { version = "0.11", features = ["blocking", "json", "rustls-tls"] }
 serde_json = "1.0"
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
@@ -36,7 +34,10 @@ windows = { version = "0.56", features = [
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
   "Win32_Graphics_Gdi",
-  "Win32_System_LibraryLoader"
+  "Win32_Security",
+  "Win32_System_LibraryLoader",
+  "Win32_Storage_FileSystem",
+  "Win32_Devices_HumanInterfaceDevice"
 ] }
 
 [build-dependencies]
