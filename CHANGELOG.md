@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.2.0
+
+- Improve HID device selection reliability
+- Possible fix for L/R handed Ursa Minor sidesticks
+
 ## v1.1.4
 
 - Add better logging for HID worker
