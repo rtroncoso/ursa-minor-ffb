@@ -29,8 +29,8 @@ use log::LogBuffer;
 // Winwing IDs
 // -----------------------------
 const WW_VID: u16 = 0x4098;
-#[allow(dead_code)]
 const WW_PID_URSA_MINOR_L: u16 = 0xBC27;
+const WW_PID_URSA_MINOR_R: u16 = 0xBC28;
 
 // -----------------------------
 // HID worker
@@ -38,6 +38,7 @@ const WW_PID_URSA_MINOR_L: u16 = 0xBC27;
 struct HidEntry {
     dev: HidDevice,
     path: String,
+    pid: u16,
     ifnum: i32,
     usage_page: u16,
     usage: u16,
@@ -49,13 +50,47 @@ struct HidEntry {
 // Helpers
 // -----------------------------
 
-fn build_simapp_vibe_frame(report_id: u8, out_len: u16, intensity: u8) -> Vec<u8> {
+fn ursa_model_name(pid: u16) -> &'static str {
+    match pid {
+        WW_PID_URSA_MINOR_L => "URSA MINOR L",
+        WW_PID_URSA_MINOR_R => "URSA MINOR R",
+        _ => "UNKNOWN",
+    }
+}
+
+fn build_simapp_vibe_frame(pid: u16, report_id: u8, out_len: u16, intensity: u8) -> Vec<u8> {
     // Body without report ID (13 bytes):
+    //
+    // URSA MINOR R:
+    // 08 BF 00 00 03 49 00 <intensity> 00 00 00 00 00
+    //
+    // URSA MINOR L:
     // 07 BF 00 00 03 49 00 <intensity> 00 00 00 00 00
-    let mut body = [
-        0x07, 0xBF, 0x00, 0x00, 0x03, 0x49, 0x00, 0x00, 0, 0, 0, 0, 0,
+    //
+    // The handedness selector is byte 1 of the body:
+    //   - 0x08 => R (PID 0xBC28)
+    //   - 0x07 => L (PID 0xBC27)
+    let handed_selector = match pid {
+        WW_PID_URSA_MINOR_R => 0x08,
+        WW_PID_URSA_MINOR_L => 0x07,
+        _ => 0x07, // safest fallback
+    };
+
+    let body: [u8; 13] = [
+        handed_selector,
+        0xBF,
+        0x00,
+        0x00,
+        0x03,
+        0x49,
+        0x00,
+        intensity,
+        0,
+        0,
+        0,
+        0,
+        0,
     ];
-    body[7] = intensity;
 
     let len = out_len as usize;
     let mut buf = vec![0u8; len];
@@ -63,6 +98,7 @@ fn build_simapp_vibe_frame(report_id: u8, out_len: u16, intensity: u8) -> Vec<u8
     if len == 0 {
         return buf;
     }
+
     buf[0] = report_id;
     let copy_len = body.len().min(len.saturating_sub(1));
     buf[1..1 + copy_len].copy_from_slice(&body[..copy_len]);
@@ -167,6 +203,7 @@ fn hid_query_caps_from_path(path_utf8: &str, logs: &LogBuffer) -> Option<(u16, u
                 .join(", ")
         )
     };
+
     logs.push(format!(
         "HID: caps path='{}' → out_len={} output_report_ids={} chosen=0x{:02X}",
         path_utf8, out_len, ids_fmt, report_id
@@ -178,13 +215,14 @@ fn hid_query_caps_from_path(path_utf8: &str, logs: &LogBuffer) -> Option<(u16, u
 fn hid_send_out(devs: &Vec<HidEntry>, intensity: u8, _logs: &LogBuffer) -> (usize, usize) {
     let mut ok = 0usize;
     let mut fail = 0usize;
+
     for d in devs {
         // Only act on joystick interfaces
         if !(d.usage_page == 0x0001 && d.usage == 0x0004) {
             continue;
         }
 
-        let frame = build_simapp_vibe_frame(d.report_id, d.out_len, intensity);
+        let frame = build_simapp_vibe_frame(d.pid, d.report_id, d.out_len, intensity);
         match d.dev.write(&frame) {
             Ok(n) => {
                 if n == frame.len() {
@@ -198,11 +236,13 @@ fn hid_send_out(devs: &Vec<HidEntry>, intensity: u8, _logs: &LogBuffer) -> (usiz
             }
         }
     }
+
     (ok, fail)
 }
 
 pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, logs: LogBuffer) {
     logs.push("HID: worker starting…");
+
     let verbose_hid = std::env::var_os("URSA_VERBOSE_HID").is_some();
     let mut api = match HidApi::new() {
         Ok(a) => {
@@ -233,7 +273,6 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
             return;
         }
 
-        // existing devices indexed by path
         let mut idx_by_path: HashMap<String, usize> = HashMap::new();
         for (i, d) in devices.iter().enumerate() {
             idx_by_path.insert(d.path.clone(), i);
@@ -246,11 +285,11 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
         let mut seen_paths: HashSet<String> = HashSet::new();
         let mut found_summary: Vec<String> = Vec::new();
 
-        // First pass: collect what we see (for a stable scan log)
         for devinfo in api.device_list() {
             if devinfo.vendor_id() != WW_VID {
                 continue;
             }
+
             let path = devinfo.path().to_string_lossy().to_string();
             let pid = devinfo.product_id();
             let ifnum = devinfo.interface_number();
@@ -259,8 +298,13 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
 
             seen_paths.insert(path.clone());
             found_summary.push(format!(
-                "pid=0x{:04X} if#{} up=0x{:04X} u=0x{:04X} path='{}'",
-                pid, ifnum, up, u, path
+                "pid=0x{:04X} ({}) if#{} up=0x{:04X} u=0x{:04X} path='{}'",
+                pid,
+                ursa_model_name(pid),
+                ifnum,
+                up,
+                u,
+                path
             ));
         }
 
@@ -283,11 +327,13 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
             if devinfo.vendor_id() != WW_VID {
                 continue;
             }
+
             let path = devinfo.path().to_string_lossy().to_string();
             if idx_by_path.contains_key(&path) {
-                continue; // already opened
+                continue;
             }
 
+            let pid = devinfo.product_id();
             let (out_len, report_id) =
                 hid_query_caps_from_path(&path, &logs).unwrap_or((14u16, 0x02u8));
 
@@ -302,6 +348,7 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
             devices.push(HidEntry {
                 dev: d,
                 path: path.clone(),
+                pid,
                 ifnum: devinfo.interface_number(),
                 usage_page: devinfo.usage_page(),
                 usage: devinfo.usage(),
@@ -310,13 +357,19 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
             });
 
             logs.push(format!(
-                "HID: device OPENED (VID=0x{:04X}, PID=0x{:04X}, if#{}, up=0x{:04X}, u=0x{:04X}, out_len={}, report_id=0x{:02X}) path='{}'",
-                devinfo.vendor_id(), devinfo.product_id(), devinfo.interface_number(), devinfo.usage_page(),
-                devinfo.usage(), out_len, report_id, devinfo.path().to_string_lossy()
+                "HID: device OPENED (VID=0x{:04X}, PID=0x{:04X} {}, if#{}, up=0x{:04X}, u=0x{:04X}, out_len={}, report_id=0x{:02X}) path='{}'",
+                devinfo.vendor_id(),
+                pid,
+                format!("({})", ursa_model_name(pid)),
+                devinfo.interface_number(),
+                devinfo.usage_page(),
+                devinfo.usage(),
+                out_len,
+                report_id,
+                devinfo.path().to_string_lossy()
             ));
         }
 
-        // Prune removed devices
         if !devices.is_empty() {
             devices.retain(|d| {
                 if seen_paths.contains(&d.path) {
@@ -356,8 +409,14 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
                     for d in &devices {
                         if let Err(e) = d.dev.write(&bytes) {
                             logs.push(format!(
-                                "HID: raw write FAILED (if#{}, usage_page=0x{:04X}, usage=0x{:04X}) path='{}': {}",
-                                d.ifnum, d.usage_page, d.usage, d.path, e
+                                "HID: raw write FAILED (PID=0x{:04X} {}, if#{}, usage_page=0x{:04X}, usage=0x{:04X}) path='{}': {}",
+                                d.pid,
+                                ursa_model_name(d.pid),
+                                d.ifnum,
+                                d.usage_page,
+                                d.usage,
+                                d.path,
+                                e
                             ));
                         }
                     }
@@ -380,7 +439,7 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
                     ensure_open(&mut api, &mut devices);
                 }
             },
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => { /* idle */ }
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
                 logs.push("HID: channel disconnected → worker exit");
                 break;
