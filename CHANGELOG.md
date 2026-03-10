@@ -1,5 +1,9 @@
 # Changelog
 
+## v2.0.0
+
+- Fixes HID payload for URSA MINOR R version
+
 ## v1.2.0
 
 - Improve HID device selection reliability

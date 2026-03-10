@@ -3821,7 +3821,7 @@ dependencies = [
 
 [[package]]
 name = "ursa_minor_ffb"
-version = "1.2.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "chrono",
