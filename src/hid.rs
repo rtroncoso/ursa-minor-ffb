@@ -29,8 +29,13 @@ use log::LogBuffer;
 // Winwing IDs
 // -----------------------------
 const WW_VID: u16 = 0x4098;
-const WW_PID_URSA_MINOR_L: u16 = 0xBC27;
-const WW_PID_URSA_MINOR_R: u16 = 0xBC28;
+
+const WW_PID_URSA_MINOR_AIRBUS_L: u16 = 0xBC27;
+const WW_PID_URSA_MINOR_AIRBUS_R: u16 = 0xBC28;
+const WW_PID_URSA_MINOR_FIGHTER_L: u16 = 0xBC29;
+const WW_PID_URSA_MINOR_FIGHTER_R: u16 = 0xBC2A;
+const WW_PID_URSA_MINOR_SPACE_L: u16 = 0xBC2B;
+const WW_PID_URSA_MINOR_SPACE_R: u16 = 0xBC2C;
 
 // -----------------------------
 // HID worker
@@ -52,29 +57,57 @@ struct HidEntry {
 
 fn ursa_model_name(pid: u16) -> &'static str {
     match pid {
-        WW_PID_URSA_MINOR_L => "URSA MINOR L",
-        WW_PID_URSA_MINOR_R => "URSA MINOR R",
+        WW_PID_URSA_MINOR_AIRBUS_L => "URSA MINOR AIRBUS L",
+        WW_PID_URSA_MINOR_AIRBUS_R => "URSA MINOR AIRBUS R",
+        WW_PID_URSA_MINOR_FIGHTER_L => "URSA MINOR FIGHTER L",
+        WW_PID_URSA_MINOR_FIGHTER_R => "URSA MINOR FIGHTER R",
+        WW_PID_URSA_MINOR_SPACE_L => "URSA MINOR SPACE L",
+        WW_PID_URSA_MINOR_SPACE_R => "URSA MINOR SPACE R",
         _ => "UNKNOWN",
+    }
+}
+
+fn is_ursa_minor_left(pid: u16) -> bool {
+    matches!(
+        pid,
+        WW_PID_URSA_MINOR_AIRBUS_L | WW_PID_URSA_MINOR_FIGHTER_L | WW_PID_URSA_MINOR_SPACE_L
+    )
+}
+
+fn is_ursa_minor_right(pid: u16) -> bool {
+    matches!(
+        pid,
+        WW_PID_URSA_MINOR_AIRBUS_R | WW_PID_URSA_MINOR_FIGHTER_R | WW_PID_URSA_MINOR_SPACE_R
+    )
+}
+
+fn handed_selector_for_pid(pid: u16) -> u8 {
+    if is_ursa_minor_right(pid) {
+        0x08
+    } else if is_ursa_minor_left(pid) {
+        0x07
+    } else {
+        0x07
     }
 }
 
 fn build_simapp_vibe_frame(pid: u16, report_id: u8, out_len: u16, intensity: u8) -> Vec<u8> {
     // Body without report ID (13 bytes):
     //
-    // URSA MINOR R:
+    // Right-handed URSA MINOR variants:
     // 08 BF 00 00 03 49 00 <intensity> 00 00 00 00 00
     //
-    // URSA MINOR L:
+    // Left-handed URSA MINOR variants:
     // 07 BF 00 00 03 49 00 <intensity> 00 00 00 00 00
     //
-    // The handedness selector is byte 1 of the body:
-    //   - 0x08 => R (PID 0xBC28)
-    //   - 0x07 => L (PID 0xBC27)
-    let handed_selector = match pid {
-        WW_PID_URSA_MINOR_R => 0x08,
-        WW_PID_URSA_MINOR_L => 0x07,
-        _ => 0x07, // safest fallback
-    };
+    // Known mappings:
+    //   0xBC27 => Airbus L
+    //   0xBC28 => Airbus R
+    //   0xBC29 => Fighter L
+    //   0xBC2A => Fighter R
+    //   0xBC2B => Space L
+    //   0xBC2C => Space R
+    let handed_selector = handed_selector_for_pid(pid);
 
     let body: [u8; 13] = [
         handed_selector,
@@ -260,7 +293,7 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
     let mut last_status_log = Instant::now() - Duration::from_secs(10);
     let mut last_missing_log = Instant::now() - Duration::from_secs(10);
 
-    const SEND_INTERVAL: Duration = Duration::from_millis(50); // 20 Hz when active
+    const SEND_INTERVAL: Duration = Duration::from_millis(50);
 
     let mut desired_intensity: u8 = 0;
     let mut last_sent_intensity: u8 = 255;
