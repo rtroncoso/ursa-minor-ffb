@@ -10,7 +10,7 @@ use std::{
 // Logging
 // -----------------------------
 #[derive(Clone)]
-pub(crate) struct LogBuffer {
+pub struct LogBuffer {
     inner: Arc<Mutex<Vec<String>>>,
     file: Arc<Mutex<Option<File>>>,
 }

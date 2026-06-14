@@ -1,0 +1,12 @@
+FROM rust:1-bookworm
+
+WORKDIR /app
+
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY tests ./tests
+COPY lib ./lib
+
+RUN cargo test --lib --tests --locked
+
+CMD ["cargo", "test", "--lib", "--tests", "--locked"]
