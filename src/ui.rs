@@ -67,7 +67,7 @@ fn controller_badge_dot(ui: &mut egui::Ui, connected: bool) {
     });
 }
 
-pub(crate) struct UiState {
+pub struct UiState {
     pub controller_connected: Arc<AtomicBool>,
 
     pub status: Arc<Mutex<SimStatus>>,
