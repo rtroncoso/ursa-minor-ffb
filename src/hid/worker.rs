@@ -1,6 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsStr;
-use std::os::windows::ffi::OsStrExt;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -10,36 +8,10 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::Receiver;
 use hidapi::{HidApi, HidDevice};
 
-use windows::core::PCWSTR;
-use windows::Win32::Devices::HumanInterfaceDevice::{
-    HidD_FreePreparsedData, HidD_GetPreparsedData, HidP_GetCaps, HidP_GetValueCaps, HidP_Output,
-    HIDP_CAPS, HIDP_STATUS_SUCCESS, HIDP_VALUE_CAPS,
-};
-use windows::Win32::Foundation::{HANDLE, NTSTATUS};
-use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_CREATION_DISPOSITION, FILE_FLAGS_AND_ATTRIBUTES,
-    FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_MODE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    OPEN_EXISTING,
-};
+use crate::hid::protocol::{build_simapp_vibe_frame, ursa_model_name, WW_VID};
+use crate::hid::win32::hid_query_caps_from_path;
+use crate::{HidCmd, LogBuffer};
 
-use crate::{log, HidCmd};
-use log::LogBuffer;
-
-// -----------------------------
-// Winwing IDs
-// -----------------------------
-const WW_VID: u16 = 0x4098;
-
-const WW_PID_URSA_MINOR_AIRBUS_L: u16 = 0xBC27;
-const WW_PID_URSA_MINOR_AIRBUS_R: u16 = 0xBC28;
-const WW_PID_URSA_MINOR_FIGHTER_L: u16 = 0xBC29;
-const WW_PID_URSA_MINOR_FIGHTER_R: u16 = 0xBC2A;
-const WW_PID_URSA_MINOR_SPACE_L: u16 = 0xBC2B;
-const WW_PID_URSA_MINOR_SPACE_R: u16 = 0xBC2C;
-
-// -----------------------------
-// HID worker
-// -----------------------------
 struct HidEntry {
     dev: HidDevice,
     path: String,
@@ -51,206 +23,11 @@ struct HidEntry {
     report_id: u8,
 }
 
-// -----------------------------
-// Helpers
-// -----------------------------
-
-fn ursa_model_name(pid: u16) -> &'static str {
-    match pid {
-        WW_PID_URSA_MINOR_AIRBUS_L => "URSA MINOR AIRBUS L",
-        WW_PID_URSA_MINOR_AIRBUS_R => "URSA MINOR AIRBUS R",
-        WW_PID_URSA_MINOR_FIGHTER_L => "URSA MINOR FIGHTER L",
-        WW_PID_URSA_MINOR_FIGHTER_R => "URSA MINOR FIGHTER R",
-        WW_PID_URSA_MINOR_SPACE_L => "URSA MINOR SPACE L",
-        WW_PID_URSA_MINOR_SPACE_R => "URSA MINOR SPACE R",
-        _ => "UNKNOWN",
-    }
-}
-
-fn is_ursa_minor_left(pid: u16) -> bool {
-    matches!(
-        pid,
-        WW_PID_URSA_MINOR_AIRBUS_L | WW_PID_URSA_MINOR_FIGHTER_L | WW_PID_URSA_MINOR_SPACE_L
-    )
-}
-
-fn is_ursa_minor_right(pid: u16) -> bool {
-    matches!(
-        pid,
-        WW_PID_URSA_MINOR_AIRBUS_R | WW_PID_URSA_MINOR_FIGHTER_R | WW_PID_URSA_MINOR_SPACE_R
-    )
-}
-
-fn handed_selector_for_pid(pid: u16) -> u8 {
-    if is_ursa_minor_right(pid) {
-        0x08
-    } else if is_ursa_minor_left(pid) {
-        0x07
-    } else {
-        0x07
-    }
-}
-
-fn build_simapp_vibe_frame(pid: u16, report_id: u8, out_len: u16, intensity: u8) -> Vec<u8> {
-    // Body without report ID (13 bytes):
-    //
-    // Right-handed URSA MINOR variants:
-    // 08 BF 00 00 03 49 00 <intensity> 00 00 00 00 00
-    //
-    // Left-handed URSA MINOR variants:
-    // 07 BF 00 00 03 49 00 <intensity> 00 00 00 00 00
-    //
-    // Known mappings:
-    //   0xBC27 => Airbus L
-    //   0xBC28 => Airbus R
-    //   0xBC29 => Fighter L
-    //   0xBC2A => Fighter R
-    //   0xBC2B => Space L
-    //   0xBC2C => Space R
-    let handed_selector = handed_selector_for_pid(pid);
-
-    let body: [u8; 13] = [
-        handed_selector,
-        0xBF,
-        0x00,
-        0x00,
-        0x03,
-        0x49,
-        0x00,
-        intensity,
-        0,
-        0,
-        0,
-        0,
-        0,
-    ];
-
-    let len = out_len as usize;
-    let mut buf = vec![0u8; len];
-
-    if len == 0 {
-        return buf;
-    }
-
-    buf[0] = report_id;
-    let copy_len = body.len().min(len.saturating_sub(1));
-    buf[1..1 + copy_len].copy_from_slice(&body[..copy_len]);
-    buf
-}
-
-/// Query Output report size and report ID using HID parser caps.
-/// Returns (out_len, report_id). Falls back to (14, 0x02) if anything fails.
-/// Logs all discovered OUTPUT ReportIDs for the device path.
-fn hid_query_caps_from_path(path_utf8: &str, logs: &LogBuffer) -> Option<(u16, u8)> {
-    let wide: Vec<u16> = OsStr::new(path_utf8)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-
-    let desired: u32 = (FILE_GENERIC_READ | FILE_GENERIC_WRITE).0;
-    let share: FILE_SHARE_MODE = FILE_SHARE_READ | FILE_SHARE_WRITE;
-    let disp: FILE_CREATION_DISPOSITION = OPEN_EXISTING;
-    let attrs: FILE_FLAGS_AND_ATTRIBUTES = FILE_ATTRIBUTE_NORMAL;
-
-    let h: HANDLE = unsafe {
-        CreateFileW(
-            PCWSTR(wide.as_ptr()),
-            desired,
-            share,
-            None,
-            disp,
-            attrs,
-            None,
-        )
-        .ok()?
-    };
-
-    let mut pp = windows::Win32::Devices::HumanInterfaceDevice::PHIDP_PREPARSED_DATA::default();
-    let got_pp = unsafe { HidD_GetPreparsedData(h, &mut pp as *mut _) }.as_bool();
-    if !got_pp {
-        let _ = unsafe { windows::Win32::Foundation::CloseHandle(h) };
-        logs.push(format!(
-            "HID: caps path='{}' → GetPreparsedData FAILED",
-            path_utf8
-        ));
-        return None;
-    }
-
-    let mut caps = HIDP_CAPS::default();
-    let st_caps: NTSTATUS = unsafe { HidP_GetCaps(pp, &mut caps) };
-    if st_caps != HIDP_STATUS_SUCCESS {
-        let _ = unsafe { HidD_FreePreparsedData(pp) };
-        let _ = unsafe { windows::Win32::Foundation::CloseHandle(h) };
-        logs.push(format!(
-            "HID: caps path='{}' → HidP_GetCaps FAILED",
-            path_utf8
-        ));
-        return None;
-    }
-
-    let out_len: u16 = caps.OutputReportByteLength;
-
-    let mut count: u16 = caps.NumberOutputValueCaps as u16;
-    let mut value_caps: Vec<HIDP_VALUE_CAPS> = vec![HIDP_VALUE_CAPS::default(); count as usize];
-
-    let st_vals: NTSTATUS = unsafe {
-        HidP_GetValueCaps(
-            HidP_Output,
-            value_caps.as_mut_ptr(),
-            &mut count as *mut u16,
-            pp,
-        )
-    };
-
-    let mut report_id: u8 = 0;
-    let mut ids: Vec<u8> = Vec::new();
-
-    if st_vals == HIDP_STATUS_SUCCESS && count > 0 {
-        value_caps.truncate(count as usize);
-
-        ids.extend(
-            value_caps
-                .iter()
-                .map(|vc| vc.ReportID as u8)
-                .filter(|&id| id != 0),
-        );
-        ids.sort_unstable();
-        ids.dedup();
-
-        if let Some(&min_nonzero) = ids.first() {
-            report_id = min_nonzero;
-        }
-    }
-
-    let _ = unsafe { HidD_FreePreparsedData(pp) };
-    let _ = unsafe { windows::Win32::Foundation::CloseHandle(h) };
-
-    let ids_fmt = if ids.is_empty() {
-        "[]".to_string()
-    } else {
-        format!(
-            "[{}]",
-            ids.iter()
-                .map(|id| format!("0x{:02X}", id))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    };
-
-    logs.push(format!(
-        "HID: caps path='{}' → out_len={} output_report_ids={} chosen=0x{:02X}",
-        path_utf8, out_len, ids_fmt, report_id
-    ));
-
-    Some((out_len, report_id))
-}
-
-fn hid_send_out(devs: &Vec<HidEntry>, intensity: u8, _logs: &LogBuffer) -> (usize, usize) {
+fn hid_send_out(devs: &[HidEntry], intensity: u8, _logs: &LogBuffer) -> (usize, usize) {
     let mut ok = 0usize;
     let mut fail = 0usize;
 
     for d in devs {
-        // Only act on joystick interfaces
         if !(d.usage_page == 0x0001 && d.usage == 0x0004) {
             continue;
         }

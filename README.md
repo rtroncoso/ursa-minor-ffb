@@ -20,7 +20,7 @@ Clone and build:
 ```bash
 git clone https://github.com/rtroncoso/ursa-minor-ffb.git
 cd ursa-minor-ffb
-cargo build --release
+cargo build --release --features app
 ```
 
 The resulting binary will be in target/release/ursa-minor-ffb.exe.
@@ -28,7 +28,34 @@ The resulting binary will be in target/release/ursa-minor-ffb.exe.
 For debugging with console logs:
 
 ```bash
-cargo run
+cargo run --features app
+```
+
+## Testing
+
+Core rumble math, HID frame encoding, and SimConnect parsing are covered by unit and integration tests that run on Linux without hardware.
+
+```bash
+# Run all library and integration tests (cross-platform)
+cargo test --lib --tests
+
+# Lint and format (same as CI)
+cargo fmt --all -- --check
+cargo clippy --lib --tests -- -D warnings
+```
+
+Reproducible local test run via Docker:
+
+```bash
+docker build -f Dockerfile.dev -t ursa-ffb-test .
+docker run --rm ursa-ffb-test
+```
+
+On Windows, build and test the full app (including GUI/HID workers):
+
+```bash
+cargo test --features app
+cargo build --release --features app
 ```
 
 ## Disclaimer

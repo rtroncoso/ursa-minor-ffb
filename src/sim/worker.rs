@@ -11,12 +11,12 @@ use crossbeam_channel::Sender;
 use libloading::Library;
 use parking_lot::Mutex;
 
-use crate::{ui::SimStatus, HidCmd};
-use crate::{ConfigShared, EffectsShared, FlightVars, LogBuffer};
+use crate::rumble::RumbleEngine;
+use crate::sim::parse::{flight_status, parse_main_elems};
+use crate::{
+    ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus,
+};
 
-// -----------------------------
-// SimConnect minimal FFI
-// -----------------------------
 type DWord = u32;
 type HRESULT = i32;
 type Handle = *mut c_void;
@@ -39,7 +39,7 @@ struct SimRecvSimObjectData {
     dw_entrynumber: DWord,
     dw_outof: DWord,
     dw_define_count: DWord,
-    dw_data: DWord, // payload starts here
+    dw_data: DWord,
 }
 
 #[repr(C)]
@@ -47,7 +47,7 @@ struct SimRecvEvent {
     base: SimRecv,
     u_group_id: DWord,
     u_event_id: DWord,
-    dw_data: DWord, // for Pause: 1=paused, 0=unpaused; EX1 returns bit flags
+    dw_data: DWord,
 }
 
 const SIMCONNECT_RECV_ID_OPEN: DWord = 2;
@@ -68,7 +68,6 @@ const EVT_SIM_START: DWord = 1001;
 const EVT_SIM_STOP: DWord = 1002;
 const EVT_FRAME: DWord = 1003;
 
-// Local IDs for pause subscriptions
 const EVT_PAUSE_SYS: DWord = 4101;
 const EVT_PAUSE_EX1_SYS: DWord = 4102;
 
@@ -123,7 +122,6 @@ struct SimConnectFns {
     subscribe_event: Option<PfnSimConnectSubscribeToSystemEvent>,
 }
 
-// ---------- Embedded SimConnect fallback ----------
 const EMBED_SIMCONNECT_BYTES: &[u8] =
     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/lib/SimConnect.dll"));
 
@@ -193,9 +191,6 @@ fn load_simconnect(logs: &LogBuffer) -> Result<SimConnectFns> {
     bind_simconnect(lib)
 }
 
-// -----------------------------
-// Sim worker
-// -----------------------------
 pub fn sim_worker(
     last_vars: Arc<Mutex<Option<FlightVars>>>,
     tx_hid: Sender<HidCmd>,
@@ -240,6 +235,7 @@ pub fn sim_worker(
             *aircraft_title.lock() = String::new();
 
             let mut in_flight: bool = true;
+            let mut rumble_engine = RumbleEngine::new();
 
             if let Some(sub) = fns.subscribe_event {
                 for (id, ev) in &[
@@ -394,22 +390,8 @@ pub fn sim_worker(
                 0,
             );
 
-            let mut last_cfg_rev = config.current_rev();
-            let mut bg_smoothed: f64 = 0.0;
-
             let mut main_seen = false;
             let mut last_main_rx = Instant::now();
-
-            let mut prev_flaps_pct: f64 = 0.0;
-            let mut prev_flaps_idx: i32 = 0;
-            let mut flap_t0: f64 = -1.0;
-            let mut flap_t1: f64 = -1.0;
-            let mut flap_peak: f64 = 0.0;
-
-            let mut prev_gear: f64 = 0.0;
-            let mut gear_t0: f64 = -1.0;
-            let mut gear_t1: f64 = -1.0;
-            let mut gear_peak: f64 = 0.0;
 
             let mut paused_event_flag: bool = false;
             let mut paused_ex1_bits: u32 = 0;
@@ -436,24 +418,13 @@ pub fn sim_worker(
                             if ev.u_event_id == EVT_SIM_START {
                                 in_flight = true;
                                 *last_vars.lock() = None;
-                                effects.flaps_bump_active.store(false, Ordering::Relaxed);
-                                effects.gear_bump_active.store(false, Ordering::Relaxed);
-                                effects.ground_active.store(false, Ordering::Relaxed);
-                                effects.ground_thump_active.store(false, Ordering::Relaxed);
-                                effects.base_active.store(false, Ordering::Relaxed);
-                                effects.bank_active.store(false, Ordering::Relaxed);
-                                effects.stall_active.store(false, Ordering::Relaxed);
+                                rumble_engine.reset();
+                                effects.clear_all();
                             } else if ev.u_event_id == EVT_SIM_STOP {
                                 in_flight = false;
                                 let _ = tx_hid.send(HidCmd::SendIntensity(0));
                                 *last_vars.lock() = None;
-                                effects.flaps_bump_active.store(false, Ordering::Relaxed);
-                                effects.gear_bump_active.store(false, Ordering::Relaxed);
-                                effects.ground_active.store(false, Ordering::Relaxed);
-                                effects.ground_thump_active.store(false, Ordering::Relaxed);
-                                effects.base_active.store(false, Ordering::Relaxed);
-                                effects.bank_active.store(false, Ordering::Relaxed);
-                                effects.stall_active.store(false, Ordering::Relaxed);
+                                effects.clear_all();
                             } else if ev.u_event_id == EVT_PAUSE_SYS {
                                 paused_event_flag = ev.dw_data != 0;
                             } else if ev.u_event_id == EVT_PAUSE_EX1_SYS {
@@ -486,13 +457,7 @@ pub fn sim_worker(
                                     *status.lock() = SimStatus::Connected;
                                     *last_vars.lock() = None;
                                     let _ = tx_hid.send(HidCmd::SendIntensity(0));
-                                    effects.flaps_bump_active.store(false, Ordering::Relaxed);
-                                    effects.gear_bump_active.store(false, Ordering::Relaxed);
-                                    effects.ground_active.store(false, Ordering::Relaxed);
-                                    effects.ground_thump_active.store(false, Ordering::Relaxed);
-                                    effects.base_active.store(false, Ordering::Relaxed);
-                                    effects.bank_active.store(false, Ordering::Relaxed);
-                                    effects.stall_active.store(false, Ordering::Relaxed);
+                                    effects.clear_all();
                                     continue;
                                 }
 
@@ -526,199 +491,26 @@ pub fn sim_worker(
                                     }
                                 }
 
-                                let paused_from_var = elem.get(10).copied().unwrap_or(0.0) != 0.0;
                                 let paused_from_events =
                                     paused_event_flag || (paused_ex1_bits != 0);
-
-                                let mut fv = FlightVars {
-                                    airspeed_indicated: elem.get(0).copied().unwrap_or(0.0),
-                                    on_ground: elem.get(1).copied().unwrap_or(0.0) != 0.0,
-                                    bank_deg: elem.get(2).copied().unwrap_or(0.0),
-                                    flaps_pct: ((elem.get(3).copied().unwrap_or(0.0)
-                                        + elem.get(4).copied().unwrap_or(0.0))
-                                        * 0.5)
-                                        .clamp(0.0, 100.0),
-                                    flaps_index: elem.get(5).copied().unwrap_or(0.0).round() as i32,
-                                    gear_handle: elem.get(6).copied().unwrap_or(0.0),
-                                    stalled: elem.get(7).copied().unwrap_or(0.0) != 0.0,
-                                    sim_time_s: elem.get(8).copied().unwrap_or(0.0),
-                                    ground_speed_kt: elem.get(9).copied().unwrap_or(0.0).max(0.0),
-                                    paused: paused_from_events || paused_from_var,
-                                };
-
-                                if !fv.airspeed_indicated.is_finite()
-                                    || fv.airspeed_indicated < -5.0
-                                    || fv.airspeed_indicated > 1200.0
-                                {
-                                    fv.airspeed_indicated = 0.0;
-                                }
                                 let cfg_now = config.get();
-                                if fv.airspeed_indicated.abs() < cfg_now.ias_deadband_kn {
-                                    fv.airspeed_indicated = 0.0;
-                                }
-                                if !fv.bank_deg.is_finite() {
-                                    fv.bank_deg = 0.0;
-                                }
+                                let fv = parse_main_elems(
+                                    &elem,
+                                    paused_from_events,
+                                    cfg_now.ias_deadband_kn,
+                                );
 
                                 *last_vars.lock() = Some(fv);
+                                *status.lock() = flight_status(&fv);
 
-                                *status.lock() = if !fv.on_ground && fv.airspeed_indicated > 30.0 {
-                                    SimStatus::InFlight
-                                } else {
-                                    SimStatus::Connected
-                                };
-
-                                let gs = fv.ground_speed_kt;
-                                let start = cfg_now.taxi_start_kn.min(cfg_now.taxi_end_kn - 0.1);
-                                let end = cfg_now.taxi_end_kn.max(start + 0.1);
-
-                                let in_thump_band = fv.on_ground && gs >= start && gs < end;
-                                let at_or_above_end = fv.on_ground && gs >= end;
-                                let at_or_above_start = fv.on_ground && gs >= start;
-
-                                effects
-                                    .taxi_start_crossed
-                                    .store(at_or_above_start, Ordering::Relaxed);
-                                effects
-                                    .taxi_end_crossed
-                                    .store(at_or_above_end, Ordering::Relaxed);
-                                effects
-                                    .ground_thump_active
-                                    .store(in_thump_band, Ordering::Relaxed);
-                                effects
-                                    .ground_active
-                                    .store(at_or_above_end, Ordering::Relaxed);
-
-                                effects.stall_active.store(fv.stalled, Ordering::Relaxed);
-                                effects.bank_active.store(
-                                    !fv.on_ground && fv.bank_deg.abs() > 5.0,
-                                    Ordering::Relaxed,
+                                let out = rumble_engine.step(
+                                    &fv,
+                                    &cfg_now,
+                                    config.current_rev(),
+                                    hold.load(Ordering::Relaxed),
                                 );
-                                effects.base_active.store(
-                                    !fv.on_ground && fv.airspeed_indicated > 30.0,
-                                    Ordering::Relaxed,
-                                );
-
-                                if fv.paused || hold.load(Ordering::Relaxed) {
-                                    let _ = tx_hid.send(HidCmd::SendIntensity(0));
-                                    continue;
-                                }
-
-                                if fv.flaps_index != prev_flaps_idx {
-                                    let steps =
-                                        (fv.flaps_index - prev_flaps_idx).abs().max(1) as usize;
-                                    flap_t0 = fv.sim_time_s;
-                                    flap_t1 = fv.sim_time_s
-                                        + cfg_now.flaps_bump_duration_s * steps as f64;
-                                    flap_peak = cfg_now.flaps_peak as f64;
-                                    prev_flaps_idx = fv.flaps_index;
-                                } else {
-                                    let dflap = (fv.flaps_pct - prev_flaps_pct).abs();
-                                    if dflap >= cfg_now.flaps_bump_eps_pct {
-                                        flap_t0 = fv.sim_time_s;
-                                        flap_t1 = fv.sim_time_s + cfg_now.flaps_bump_duration_s;
-                                        let scale = (dflap / 12.5).clamp(0.5, 1.0);
-                                        flap_peak = (cfg_now.flaps_peak as f64) * scale;
-                                    }
-                                    prev_flaps_pct = fv.flaps_pct;
-                                }
-
-                                if (fv.gear_handle - prev_gear).abs() >= 0.5 {
-                                    gear_t0 = fv.sim_time_s;
-                                    gear_t1 = fv.sim_time_s + cfg_now.gear_bump_duration_s;
-                                    gear_peak = cfg_now.gear_peak as f64;
-                                }
-                                prev_gear = fv.gear_handle;
-
-                                let mut ground_term = 0.0;
-
-                                if fv.on_ground && gs >= start {
-                                    let t_norm = ((gs - start) / (end - start)).clamp(0.0, 1.0);
-
-                                    let period = cfg_now.thump_max_period_s
-                                        - t_norm
-                                            * (cfg_now.thump_max_period_s
-                                                - cfg_now.thump_min_period_s);
-
-                                    let cycle = (fv.sim_time_s / period).fract();
-
-                                    let duty = cfg_now.thump_duty.clamp(0.05, 0.4);
-                                    let in_pulse = cycle < duty;
-                                    let thump_env = if in_pulse {
-                                        let p = (cycle / duty).clamp(0.0, 1.0);
-                                        (std::f64::consts::PI * p).sin()
-                                    } else {
-                                        0.0
-                                    };
-
-                                    let amp = (cfg_now.ground_roll as f64) * (0.35 + 0.65 * t_norm);
-
-                                    ground_term = thump_env * amp;
-
-                                    if gs >= end {
-                                        let f_hz = 8.0;
-                                        let phase =
-                                            (2.0 * std::f64::consts::PI * f_hz * fv.sim_time_s)
-                                                .sin()
-                                                * 0.5
-                                                + 0.5;
-                                        ground_term = (cfg_now.ground_roll as f64) * phase;
-                                    }
-                                }
-
-                                let mut air_term = 0.0;
-                                if !fv.on_ground && fv.airspeed_indicated > 30.0 {
-                                    air_term += (fv.airspeed_indicated / 250.0).clamp(0.0, 1.0)
-                                        * (cfg_now.base_airspeed as f64);
-                                }
-                                if !fv.on_ground {
-                                    let bank = fv.bank_deg.abs().min(45.0) / 45.0;
-                                    air_term += bank * (cfg_now.bank as f64);
-                                }
-
-                                let bg = air_term + ground_term;
-                                if config.current_rev() != last_cfg_rev {
-                                    bg_smoothed = bg;
-                                    last_cfg_rev = config.current_rev();
-                                } else {
-                                    let alpha = cfg_now.smoothing_alpha.clamp(0.0, 1.0) as f64;
-                                    bg_smoothed = bg_smoothed + alpha * (bg - bg_smoothed);
-                                }
-
-                                let mut transients: f64 = 0.0;
-                                if fv.stalled {
-                                    transients = transients.max(cfg_now.stall_ceiling as f64);
-                                }
-                                let flap_active = fv.sim_time_s >= flap_t0
-                                    && fv.sim_time_s <= flap_t1
-                                    && flap_peak > 0.0;
-                                let gear_active = fv.sim_time_s >= gear_t0
-                                    && fv.sim_time_s <= gear_t1
-                                    && gear_peak > 0.0;
-                                if flap_active {
-                                    let elapsed = fv.sim_time_s - flap_t0;
-                                    let period = 1.0_f64.max(cfg_now.flaps_bump_duration_s);
-                                    let phase = (elapsed % period) / period;
-                                    transients += flap_peak * (std::f64::consts::PI * phase).sin();
-                                }
-                                if gear_active {
-                                    let p = ((fv.sim_time_s - gear_t0) / (gear_t1 - gear_t0))
-                                        .clamp(0.0, 1.0);
-                                    transients += gear_peak * (std::f64::consts::PI * p).sin();
-                                }
-                                effects
-                                    .flaps_bump_active
-                                    .store(flap_active, Ordering::Relaxed);
-                                effects
-                                    .gear_bump_active
-                                    .store(gear_active, Ordering::Relaxed);
-
-                                let mut total = bg_smoothed + transients;
-                                if fv.stalled {
-                                    total = total.max(cfg_now.stall_ceiling as f64);
-                                }
-                                total = total.clamp(0.0, cfg_now.max_output as f64);
-                                let _ = tx_hid.send(HidCmd::SendIntensity(total.round() as u8));
+                                effects.apply_snapshot(&out.effects);
+                                let _ = tx_hid.send(HidCmd::SendIntensity(out.intensity));
                             }
                         }
                         SIMCONNECT_RECV_ID_EXCEPTION => {}

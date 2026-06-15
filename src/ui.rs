@@ -13,24 +13,15 @@ use std::{
 };
 
 use crate::{
-    tray, updater, ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, RumbleConfig, UiCmd,
+    tray, updater, ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, RumbleConfig,
+    SimStatus, UiCmd,
 };
 
-// -----------------------------
-// GUI state
-// -----------------------------
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum Tab {
     Main,
     #[cfg(debug_assertions)]
     Debug,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum SimStatus {
-    Disconnected,
-    Connected,
-    InFlight,
 }
 
 fn circle_indicator_colored(ui: &mut egui::Ui, color: Color32, filled: bool) {
@@ -76,7 +67,7 @@ fn controller_badge_dot(ui: &mut egui::Ui, connected: bool) {
     });
 }
 
-pub(crate) struct UiState {
+pub struct UiState {
     pub controller_connected: Arc<AtomicBool>,
 
     pub status: Arc<Mutex<SimStatus>>,
