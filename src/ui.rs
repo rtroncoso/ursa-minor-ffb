@@ -3,7 +3,6 @@ use egui_extras::{Column, TableBuilder};
 
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use parking_lot::Mutex;
-use windows::Win32::Foundation::HWND;
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -11,10 +10,11 @@ use std::{
     },
     time::Duration,
 };
+use windows::Win32::Foundation::HWND;
 
 use crate::{
-    tray, updater, ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, RumbleConfig,
-    SimStatus, UiCmd,
+    preset::{PresetKind, PresetShared, PresetStore},
+    tray, updater, EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus, UiCmd,
 };
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -73,7 +73,10 @@ pub struct UiState {
     pub status: Arc<Mutex<SimStatus>>,
     pub aircraft_title: Arc<Mutex<String>>,
 
-    pub config: Arc<ConfigShared>,
+    pub config: Arc<PresetShared>,
+    pub preset_store: PresetStore,
+    pub custom_dirty: bool,
+    pub preset_status: Option<String>,
     pub effects: EffectsShared,
 
     #[cfg(debug_assertions)]
@@ -243,6 +246,34 @@ impl eframe::App for UiState {
 
         if show_main {
             egui::CentralPanel::default().show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Preset").strong());
+                    let previous_kind = self.config.kind();
+                    let mut selected = previous_kind;
+                    egui::ComboBox::from_id_source("preset_kind")
+                        .selected_text(selected.label())
+                        .show_ui(ui, |ui| {
+                            for kind in PresetKind::ALL {
+                                ui.selectable_value(&mut selected, kind, kind.label());
+                            }
+                        });
+                    if selected != previous_kind {
+                        let preset = self.preset_store.load(selected);
+                        self.config.set(preset);
+                        self.custom_dirty = false;
+                        self.preset_status = None;
+                        let _ = self.preset_store.save_active(selected);
+                    }
+                    if self.custom_dirty {
+                        ui.colored_label(Color32::from_rgb(220, 180, 40), "unsaved");
+                    }
+                });
+
+                if let Some(msg) = &self.preset_status {
+                    ui.colored_label(Color32::from_rgb(30, 180, 90), msg);
+                }
+
+                ui.add_space(4.0);
                 ui.heading("Rumble Effects");
                 ui.add_space(4.0);
 
@@ -253,7 +284,15 @@ impl eframe::App for UiState {
                 let taxi_start_crossed = self.effects.taxi_start_crossed.load(Ordering::Relaxed);
                 let taxi_end_crossed = self.effects.taxi_end_crossed.load(Ordering::Relaxed);
 
-                self.config.with_mut(|cfg| {
+                self.config.with_mut_rumble(|cfg, kind| {
+                    let kind = if kind != PresetKind::Custom {
+                        self.custom_dirty = true;
+                        self.preset_status = None;
+                        PresetKind::Custom
+                    } else {
+                        kind
+                    };
+
                     UiState::effect_row(
                         ui,
                         "Base (airspeed)",
@@ -341,18 +380,45 @@ impl eframe::App for UiState {
                         self.effects.bank_active.load(Ordering::Relaxed),
                         &mut _changed,
                     );
+
+                    kind
                 });
 
                 ui.horizontal(|ui| {
-                    if ui.button("Reset to defaults").clicked() {
-                        self.config.set(RumbleConfig::default());
+                    if ui.button("Reset preset").clicked() {
+                        let kind = self.config.kind();
+                        let preset = if kind == PresetKind::Custom {
+                            self.preset_store.load(PresetKind::Custom)
+                        } else {
+                            self.preset_store.reset_to_built_in(kind)
+                        };
+                        self.config.set(preset);
+                        self.custom_dirty = false;
+                        self.preset_status = None;
+                    }
+                    let save_enabled =
+                        self.config.kind() == PresetKind::Custom && self.custom_dirty;
+                    if ui
+                        .add_enabled(save_enabled, egui::Button::new("Save preset"))
+                        .clicked()
+                    {
+                        let preset = self.config.get();
+                        match self.preset_store.save(&preset) {
+                            Ok(()) => {
+                                self.custom_dirty = false;
+                                self.preset_status = Some("Saved custom preset.".to_string());
+                            }
+                            Err(e) => {
+                                self.preset_status = Some(format!("Save failed: {e}"));
+                            }
+                        }
                     }
                 });
 
                 ui.separator();
 
                 ui.heading("Live Aircraft Data");
-                let v = *self.last_vars.lock();
+                let v = self.last_vars.lock().clone();
                 match v {
                     Some(v) => {
                         UiState::kv_line(

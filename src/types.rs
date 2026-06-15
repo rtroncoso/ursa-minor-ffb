@@ -1,10 +1,10 @@
-use parking_lot::Mutex;
+use std::collections::HashMap;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, Ordering},
     Arc,
 };
 
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct FlightVars {
     pub sim_time_s: f64,
     pub airspeed_indicated: f64,
@@ -16,9 +16,10 @@ pub struct FlightVars {
     pub stalled: bool,
     pub ground_speed_kt: f64,
     pub paused: bool,
+    pub extras: HashMap<String, f64>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RumbleConfig {
     pub base_airspeed: f32,
     pub ground_roll: f32,
@@ -42,17 +43,17 @@ pub struct RumbleConfig {
 impl Default for RumbleConfig {
     fn default() -> Self {
         Self {
-            base_airspeed: 16.0,
-            ground_roll: 38.0,
-            flaps_peak: 60.0,
-            gear_peak: 110.0,
+            base_airspeed: 18.0,
+            ground_roll: 55.0,
+            flaps_peak: 65.0,
+            gear_peak: 120.0,
             stall_ceiling: 160.0,
-            bank: 70.0,
+            bank: 45.0,
             max_output: 255,
             smoothing_alpha: 0.18,
             ias_deadband_kn: 1.0,
-            taxi_start_kn: 3.0,
-            taxi_end_kn: 10.0,
+            taxi_start_kn: 5.0,
+            taxi_end_kn: 18.0,
             thump_min_period_s: 0.25,
             thump_max_period_s: 0.90,
             thump_duty: 0.22,
@@ -83,39 +84,6 @@ pub enum HidCmd {
     StopAll,
     ReopenDevices,
     SetHold(bool),
-}
-
-pub struct ConfigShared {
-    inner: Mutex<RumbleConfig>,
-    rev: AtomicU64,
-}
-
-impl ConfigShared {
-    pub fn new() -> Self {
-        Self {
-            inner: Mutex::new(RumbleConfig::default()),
-            rev: AtomicU64::new(1),
-        }
-    }
-
-    pub fn get(&self) -> RumbleConfig {
-        self.inner.lock().clone()
-    }
-
-    pub fn set(&self, v: RumbleConfig) {
-        *self.inner.lock() = v;
-        self.rev.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn with_mut<F: FnOnce(&mut RumbleConfig)>(&self, f: F) {
-        let mut g = self.inner.lock();
-        f(&mut g);
-        self.rev.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn current_rev(&self) -> u64 {
-        self.rev.load(Ordering::Relaxed)
-    }
 }
 
 #[derive(Default)]
@@ -149,7 +117,8 @@ impl EffectsState {
             .store(snap.taxi_end_crossed, Ordering::Relaxed);
         self.base_active.store(snap.base_active, Ordering::Relaxed);
         self.bank_active.store(snap.bank_active, Ordering::Relaxed);
-        self.stall_active.store(snap.stall_active, Ordering::Relaxed);
+        self.stall_active
+            .store(snap.stall_active, Ordering::Relaxed);
     }
 
     pub fn clear_all(&self) {
