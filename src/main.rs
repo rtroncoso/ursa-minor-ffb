@@ -3,9 +3,10 @@
 use ursa_minor_ffb::{
     hid::hid_worker,
     log::LogBuffer,
+    preset::{PresetKind, PresetShared, PresetStore},
     sim::sim_worker,
     ui::{Tab, UiState},
-    ConfigShared, EffectsShared, EffectsState, FlightVars, HidCmd, UiCmd,
+    EffectsShared, EffectsState, FlightVars, HidCmd, UiCmd,
 };
 
 use anyhow::Result;
@@ -27,12 +28,27 @@ fn main() -> Result<()> {
 
     let controller_connected = Arc::new(AtomicBool::new(false));
     let last_vars = Arc::new(Mutex::new(None::<FlightVars>));
-    let config = Arc::new(ConfigShared::new());
     let effects: EffectsShared = Arc::new(EffectsState::default());
     let hold = Arc::new(AtomicBool::new(false));
     let status = Arc::new(Mutex::new(ursa_minor_ffb::SimStatus::Disconnected));
     let aircraft_title = Arc::new(Mutex::new(String::new()));
     let logs = LogBuffer::default();
+
+    let preset_store = PresetStore::at_exe_dir();
+    if let Err(e) = preset_store.bootstrap() {
+        logs.push(format!("Preset bootstrap failed: {e}"));
+    } else {
+        logs.push(format!(
+            "Presets directory → {}",
+            preset_store.dir().display()
+        ));
+    }
+
+    let active_kind = preset_store.load_active();
+    let mut initial_preset = preset_store.load(active_kind);
+    initial_preset.kind = active_kind;
+    let saved_custom = preset_store.load(PresetKind::Custom);
+    let config = Arc::new(PresetShared::new(initial_preset));
 
     match logs.try_init_file_prefer_exe_dir() {
         Ok(p) => logs.push(format!("File logging enabled → {}", p.display())),
@@ -71,8 +87,8 @@ fn main() -> Result<()> {
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([478.0, 520.0])
-            .with_min_inner_size([400.0, 420.0])
+            .with_inner_size([478.0, 560.0])
+            .with_min_inner_size([400.0, 460.0])
             .with_resizable(false)
             .with_maximize_button(false)
             .with_minimize_button(true),
@@ -86,6 +102,9 @@ fn main() -> Result<()> {
         aircraft_title,
 
         config,
+        preset_store,
+        saved_custom,
+        preset_status: None,
         effects,
 
         #[cfg(debug_assertions)]

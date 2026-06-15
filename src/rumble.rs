@@ -112,8 +112,8 @@ impl RumbleEngine {
         if fv.on_ground && gs >= start {
             let t_norm = ((gs - start) / (end - start)).clamp(0.0, 1.0);
 
-            let period = cfg.thump_max_period_s
-                - t_norm * (cfg.thump_max_period_s - cfg.thump_min_period_s);
+            let period =
+                cfg.thump_max_period_s - t_norm * (cfg.thump_max_period_s - cfg.thump_min_period_s);
 
             let cycle = (fv.sim_time_s / period).fract();
 
@@ -325,7 +325,7 @@ mod tests {
     #[test]
     fn continuous_ground_roll_at_high_taxi_speed() {
         let mut engine = RumbleEngine::new();
-        let fv = ground_taxi(1.0, 15.0);
+        let fv = ground_taxi(1.0, 22.0);
         let out = engine.step(&fv, &cfg(), 1, false);
         assert!(out.effects.ground_active);
         assert!(out.intensity > 0);
@@ -365,7 +365,7 @@ mod tests {
         assert!(out_mid.effects.taxi_start_crossed);
         assert!(!out_mid.effects.taxi_end_crossed);
 
-        let fast = ground_taxi(0.2, 12.0);
+        let fast = ground_taxi(0.2, 20.0);
         let out_fast = engine.step(&fast, &cfg(), 1, false);
         assert!(out_fast.effects.taxi_end_crossed);
     }
@@ -373,7 +373,9 @@ mod tests {
     #[test]
     fn air_term_scales_with_airspeed() {
         let mut engine = RumbleEngine::new();
-        let slow = engine.step(&airborne(50.0, 1.0), &cfg(), 1, false).intensity;
+        let slow = engine
+            .step(&airborne(50.0, 1.0), &cfg(), 1, false)
+            .intensity;
         let mut engine2 = RumbleEngine::new();
         let fast = engine2
             .step(&airborne(200.0, 1.0), &cfg(), 1, false)

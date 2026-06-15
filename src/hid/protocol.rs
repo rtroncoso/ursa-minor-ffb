@@ -84,7 +84,10 @@ mod tests {
         let frame = build_simapp_vibe_frame(WW_PID_URSA_MINOR_AIRBUS_L, 0x02, 14, 0x19);
         assert_eq!(frame.len(), 14);
         assert_eq!(frame[0], 0x02);
-        assert_eq!(&frame[1..], &[0x07, 0xBF, 0x00, 0x00, 0x03, 0x49, 0x00, 0x19, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            &frame[1..],
+            &[0x07, 0xBF, 0x00, 0x00, 0x03, 0x49, 0x00, 0x19, 0, 0, 0, 0, 0]
+        );
     }
 
     #[test]
@@ -141,8 +144,14 @@ mod tests {
 
     #[test]
     fn model_names_for_known_pids() {
-        assert_eq!(ursa_model_name(WW_PID_URSA_MINOR_AIRBUS_L), "URSA MINOR AIRBUS L");
-        assert_eq!(ursa_model_name(WW_PID_URSA_MINOR_SPACE_R), "URSA MINOR SPACE R");
+        assert_eq!(
+            ursa_model_name(WW_PID_URSA_MINOR_AIRBUS_L),
+            "URSA MINOR AIRBUS L"
+        );
+        assert_eq!(
+            ursa_model_name(WW_PID_URSA_MINOR_SPACE_R),
+            "URSA MINOR SPACE R"
+        );
         assert_eq!(ursa_model_name(0x0000), "UNKNOWN");
     }
 }

@@ -1,11 +1,17 @@
-use ursa_minor_ffb::hid::protocol::{
-    build_simapp_vibe_frame, WW_PID_URSA_MINOR_AIRBUS_L,
-};
+use ursa_minor_ffb::hid::protocol::{build_simapp_vibe_frame, WW_PID_URSA_MINOR_AIRBUS_L};
 use ursa_minor_ffb::rumble::RumbleEngine;
 use ursa_minor_ffb::sim::parse::{flight_status, parse_main_elems};
-use ursa_minor_ffb::{FlightVars, RumbleConfig, SimStatus};
+use ursa_minor_ffb::{FlightVars, PresetKind, PresetShared, RumbleConfig, SimStatus, SimVarLayout};
 
 mod support;
+
+fn commercial_rumble() -> RumbleConfig {
+    PresetKind::Commercial.built_in_default().rumble
+}
+
+fn core_layout() -> SimVarLayout {
+    SimVarLayout::core_only()
+}
 
 fn elems_from_flight(
     ias: f64,
@@ -27,24 +33,25 @@ fn elems_from_flight(
 
 #[test]
 fn pipeline_ground_taxi_to_takeoff() {
-    let cfg = RumbleConfig::default();
+    let cfg = commercial_rumble();
+    let layout = core_layout();
     let mut engine = RumbleEngine::new();
 
     let taxi_elems = elems_from_flight(0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.05, 5.0, 0.0);
-    let taxi_fv = parse_main_elems(&taxi_elems, false, cfg.ias_deadband_kn);
+    let taxi_fv = parse_main_elems(&taxi_elems, &layout, false, cfg.ias_deadband_kn);
     assert_eq!(flight_status(&taxi_fv), SimStatus::Connected);
 
     let taxi_out = engine.step(&taxi_fv, &cfg, 1, false);
     assert!(taxi_out.effects.ground_thump_active);
     assert!(taxi_out.intensity > 0);
 
-    let taxi_frame = build_simapp_vibe_frame(WW_PID_URSA_MINOR_AIRBUS_L, 0x02, 14, taxi_out.intensity);
+    let taxi_frame =
+        build_simapp_vibe_frame(WW_PID_URSA_MINOR_AIRBUS_L, 0x02, 14, taxi_out.intensity);
     assert_eq!(taxi_frame[0], 0x02);
     assert_eq!(taxi_frame[8], taxi_out.intensity);
 
-    let takeoff_elems =
-        elems_from_flight(120.0, 0.0, 5.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0);
-    let takeoff_fv = parse_main_elems(&takeoff_elems, false, cfg.ias_deadband_kn);
+    let takeoff_elems = elems_from_flight(120.0, 0.0, 5.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+    let takeoff_fv = parse_main_elems(&takeoff_elems, &layout, false, cfg.ias_deadband_kn);
     assert_eq!(flight_status(&takeoff_fv), SimStatus::InFlight);
 
     let takeoff_out = engine.step(&takeoff_fv, &cfg, 1, false);
@@ -54,15 +61,16 @@ fn pipeline_ground_taxi_to_takeoff() {
 
 #[test]
 fn pipeline_flap_change_during_flight() {
-    let cfg = RumbleConfig::default();
+    let cfg = commercial_rumble();
+    let layout = core_layout();
     let mut engine = RumbleEngine::new();
 
     let cruise = elems_from_flight(150.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0);
-    let cruise_fv = parse_main_elems(&cruise, false, cfg.ias_deadband_kn);
+    let cruise_fv = parse_main_elems(&cruise, &layout, false, cfg.ias_deadband_kn);
     let _ = engine.step(&cruise_fv, &cfg, 1, false);
 
     let flaps = elems_from_flight(150.0, 0.0, 0.0, 50.0, 50.0, 2.0, 0.0, 0.0, 10.1, 0.0, 0.0);
-    let flaps_fv = parse_main_elems(&flaps, false, cfg.ias_deadband_kn);
+    let flaps_fv = parse_main_elems(&flaps, &layout, false, cfg.ias_deadband_kn);
     let out = engine.step(&flaps_fv, &cfg, 1, false);
 
     assert!(out.effects.flaps_bump_active);
@@ -73,11 +81,12 @@ fn pipeline_flap_change_during_flight() {
 
 #[test]
 fn pipeline_stall_ceiling() {
-    let cfg = RumbleConfig::default();
+    let cfg = commercial_rumble();
+    let layout = core_layout();
     let mut engine = RumbleEngine::new();
 
     let stall_elems = elems_from_flight(80.0, 0.0, 30.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0);
-    let stall_fv = parse_main_elems(&stall_elems, false, cfg.ias_deadband_kn);
+    let stall_fv = parse_main_elems(&stall_elems, &layout, false, cfg.ias_deadband_kn);
     let out = engine.step(&stall_fv, &cfg, 1, false);
 
     assert!(out.effects.stall_active);
@@ -86,15 +95,16 @@ fn pipeline_stall_ceiling() {
 
 #[test]
 fn pipeline_pause_zeros_output() {
-    let cfg = RumbleConfig::default();
+    let cfg = commercial_rumble();
+    let layout = core_layout();
     let mut engine = RumbleEngine::new();
 
     let flying = elems_from_flight(200.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0);
-    let fv = parse_main_elems(&flying, false, cfg.ias_deadband_kn);
+    let fv = parse_main_elems(&flying, &layout, false, cfg.ias_deadband_kn);
     let active = engine.step(&fv, &cfg, 1, false);
     assert!(active.intensity > 0);
 
-    let paused_fv = parse_main_elems(&flying, true, cfg.ias_deadband_kn);
+    let paused_fv = parse_main_elems(&flying, &layout, true, cfg.ias_deadband_kn);
     let paused = engine.step(&paused_fv, &cfg, 1, false);
     assert_eq!(paused.intensity, 0);
 
@@ -104,15 +114,16 @@ fn pipeline_pause_zeros_output() {
 
 #[test]
 fn pipeline_gear_retraction_bump() {
-    let cfg = RumbleConfig::default();
+    let cfg = commercial_rumble();
+    let layout = core_layout();
     let mut engine = RumbleEngine::new();
 
     let gear_down = elems_from_flight(150.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 5.0, 0.0, 0.0);
-    let down_fv = parse_main_elems(&gear_down, false, cfg.ias_deadband_kn);
+    let down_fv = parse_main_elems(&gear_down, &layout, false, cfg.ias_deadband_kn);
     let _ = engine.step(&down_fv, &cfg, 1, false);
 
     let gear_up = elems_from_flight(150.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 5.05, 0.0, 0.0);
-    let up_fv = parse_main_elems(&gear_up, false, cfg.ias_deadband_kn);
+    let up_fv = parse_main_elems(&gear_up, &layout, false, cfg.ias_deadband_kn);
     let out = engine.step(&up_fv, &cfg, 1, false);
 
     assert!(out.effects.gear_bump_active);
@@ -121,12 +132,13 @@ fn pipeline_gear_retraction_bump() {
 #[test]
 fn pipeline_scripted_timeline_via_support() {
     let timeline = support::scripted_flight_timeline();
-    let cfg = RumbleConfig::default();
+    let cfg = commercial_rumble();
+    let layout = core_layout();
     let mut engine = RumbleEngine::new();
     let mut intensities = Vec::new();
 
     for (elems, paused_events) in timeline {
-        let fv = parse_main_elems(&elems, paused_events, cfg.ias_deadband_kn);
+        let fv = parse_main_elems(&elems, &layout, paused_events, cfg.ias_deadband_kn);
         let out = engine.step(&fv, &cfg, 1, false);
         intensities.push(out.intensity);
     }
@@ -137,7 +149,8 @@ fn pipeline_scripted_timeline_via_support() {
 
 #[test]
 fn pipeline_frame_encoding_matches_intensity_at_each_step() {
-    let cfg = RumbleConfig::default();
+    let cfg = commercial_rumble();
+    let layout = core_layout();
     let mut engine = RumbleEngine::new();
     let steps = [
         elems_from_flight(0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.1, 6.0, 0.0),
@@ -145,7 +158,7 @@ fn pipeline_frame_encoding_matches_intensity_at_each_step() {
     ];
 
     for elems in steps {
-        let fv = parse_main_elems(&elems, false, cfg.ias_deadband_kn);
+        let fv = parse_main_elems(&elems, &layout, false, cfg.ias_deadband_kn);
         let out = engine.step(&fv, &cfg, 1, false);
         let frame = build_simapp_vibe_frame(WW_PID_URSA_MINOR_AIRBUS_L, 0x02, 14, out.intensity);
         assert_eq!(frame[8], out.intensity);
@@ -153,15 +166,17 @@ fn pipeline_frame_encoding_matches_intensity_at_each_step() {
 }
 
 #[test]
-fn config_shared_rev_triggers_smoothing_reset() {
-    use ursa_minor_ffb::ConfigShared;
+fn preset_shared_rev_triggers_smoothing_reset() {
     use std::sync::Arc;
 
-    let shared = Arc::new(ConfigShared::new());
-    let cfg1 = shared.get();
+    let shared = Arc::new(PresetShared::new(PresetKind::Commercial.built_in_default()));
+    let cfg1 = shared.rumble_config();
     let rev1 = shared.current_rev();
 
-    shared.with_mut(|c| c.base_airspeed = 32.0);
+    shared.with_mut_rumble(|c, k| {
+        c.base_airspeed = 32.0;
+        k
+    });
     let rev2 = shared.current_rev();
     assert!(rev2 > rev1);
 
@@ -174,6 +189,6 @@ fn config_shared_rev_triggers_smoothing_reset() {
     };
 
     let _ = engine.step(&fv, &cfg1, rev1, false);
-    let out = engine.step(&fv, &shared.get(), rev2, false);
+    let out = engine.step(&fv, &shared.rumble_config(), rev2, false);
     assert!(out.intensity > 0);
 }

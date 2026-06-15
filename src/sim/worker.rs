@@ -11,11 +11,10 @@ use crossbeam_channel::Sender;
 use libloading::Library;
 use parking_lot::Mutex;
 
+use crate::preset::{PresetShared, CORE_SIMVARS};
 use crate::rumble::RumbleEngine;
 use crate::sim::parse::{flight_status, parse_main_elems};
-use crate::{
-    ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus,
-};
+use crate::{EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus};
 
 type DWord = u32;
 type HRESULT = i32;
@@ -195,7 +194,7 @@ pub fn sim_worker(
     last_vars: Arc<Mutex<Option<FlightVars>>>,
     tx_hid: Sender<HidCmd>,
     logs: LogBuffer,
-    config: Arc<ConfigShared>,
+    preset: Arc<PresetShared>,
     effects: EffectsShared,
     hold: Arc<AtomicBool>,
     status: Arc<Mutex<SimStatus>>,
@@ -236,6 +235,9 @@ pub fn sim_worker(
 
             let mut in_flight: bool = true;
             let mut rumble_engine = RumbleEngine::new();
+            let session_simvars = preset.simvar_profile();
+            let session_layout = session_simvars.layout();
+            let max_elem_count = session_layout.total_count().max(CORE_SIMVARS.len());
 
             if let Some(sub) = fns.subscribe_event {
                 for (id, ev) in &[
@@ -286,20 +288,7 @@ pub fn sim_worker(
                 )
             };
 
-            let defs = [
-                ("AIRSPEED INDICATED", "Knots"),
-                ("SIM ON GROUND", "Bool"),
-                ("PLANE BANK DEGREES", "Degrees"),
-                ("TRAILING EDGE FLAPS LEFT PERCENT", "Percent"),
-                ("TRAILING EDGE FLAPS RIGHT PERCENT", "Percent"),
-                ("FLAPS HANDLE INDEX", "Number"),
-                ("GEAR HANDLE POSITION", "Bool"),
-                ("STALL WARNING", "Bool"),
-                ("ABSOLUTE TIME", "Seconds"),
-                ("GROUND VELOCITY", "Knots"),
-                ("PAUSED", "Bool"),
-            ];
-            for (name, unit) in defs {
+            for (name, unit) in session_simvars.all_simvar_defs() {
                 let hr = add(DEF_MAIN, name, unit);
                 if hr < 0 {
                     logs.push(format!(
@@ -397,6 +386,11 @@ pub fn sim_worker(
             let mut paused_ex1_bits: u32 = 0;
 
             loop {
+                if preset.simvar_profile() != session_simvars {
+                    logs.push("SimConnect: preset simvars changed, reconnecting".to_string());
+                    break;
+                }
+
                 let mut p_recv: *mut SimRecv = std::ptr::null_mut();
                 let mut cb: DWord = 0;
                 let hr = (fns.next_dispatch)(h_sc, &mut p_recv, &mut cb);
@@ -472,11 +466,11 @@ pub fn sim_worker(
                                     continue;
                                 }
 
-                                let mut elem = [0f64; 11];
+                                let mut elem = vec![0f64; max_elem_count];
                                 if want_f64 {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f64,
-                                        count.min(11),
+                                        count.min(max_elem_count),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x;
@@ -484,7 +478,7 @@ pub fn sim_worker(
                                 } else {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f32,
-                                        count.min(11),
+                                        count.min(max_elem_count),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x as f64;
@@ -493,23 +487,24 @@ pub fn sim_worker(
 
                                 let paused_from_events =
                                     paused_event_flag || (paused_ex1_bits != 0);
-                                let cfg_now = config.get();
+                                let cfg_now = preset.rumble_config();
                                 let fv = parse_main_elems(
                                     &elem,
+                                    &session_layout,
                                     paused_from_events,
                                     cfg_now.ias_deadband_kn,
                                 );
 
-                                *last_vars.lock() = Some(fv);
                                 *status.lock() = flight_status(&fv);
 
                                 let out = rumble_engine.step(
                                     &fv,
                                     &cfg_now,
-                                    config.current_rev(),
+                                    preset.current_rev(),
                                     hold.load(Ordering::Relaxed),
                                 );
                                 effects.apply_snapshot(&out.effects);
+                                *last_vars.lock() = Some(fv);
                                 let _ = tx_hid.send(HidCmd::SendIntensity(out.intensity));
                             }
                         }
