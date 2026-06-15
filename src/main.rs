@@ -45,7 +45,9 @@ fn main() -> Result<()> {
     }
 
     let active_kind = preset_store.load_active();
-    let initial_preset = preset_store.load(active_kind);
+    let mut initial_preset = preset_store.load(active_kind);
+    initial_preset.kind = active_kind;
+    let saved_custom = preset_store.load(PresetKind::Custom);
     let config = Arc::new(PresetShared::new(initial_preset));
 
     match logs.try_init_file_prefer_exe_dir() {
@@ -101,7 +103,7 @@ fn main() -> Result<()> {
 
         config,
         preset_store,
-        custom_dirty: false,
+        saved_custom,
         preset_status: None,
         effects,
 

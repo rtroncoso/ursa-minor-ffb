@@ -13,7 +13,7 @@ use std::{
 use windows::Win32::Foundation::HWND;
 
 use crate::{
-    preset::{PresetKind, PresetShared, PresetStore},
+    preset::{Preset, PresetKind, PresetShared, PresetStore},
     tray, updater, EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus, UiCmd,
 };
 
@@ -75,7 +75,7 @@ pub struct UiState {
 
     pub config: Arc<PresetShared>,
     pub preset_store: PresetStore,
-    pub custom_dirty: bool,
+    pub saved_custom: Preset,
     pub preset_status: Option<String>,
     pub effects: EffectsShared,
 
@@ -106,6 +106,39 @@ pub struct UiState {
 impl UiState {
     fn kv_line(ui: &mut egui::Ui, k: &str, v: impl Into<String>) {
         ui.label(RichText::new(format!("{}: {}", k, v.into())).strong());
+    }
+
+    fn custom_needs_save(&self) -> bool {
+        if self.config.kind() != PresetKind::Custom {
+            return false;
+        }
+        let current = self.config.get();
+        current.rumble != self.saved_custom.rumble || current.simvars != self.saved_custom.simvars
+    }
+
+    fn select_preset(&mut self, kind: PresetKind) {
+        let preset = self.preset_store.load(kind);
+        self.config.set(preset);
+        if kind == PresetKind::Custom {
+            self.saved_custom = self.preset_store.load(PresetKind::Custom);
+        }
+        self.preset_status = None;
+        let _ = self.preset_store.save_active(kind);
+    }
+
+    fn save_custom_preset(&mut self) {
+        let mut preset = self.config.get();
+        preset.kind = PresetKind::Custom;
+        match self.preset_store.save(&preset) {
+            Ok(()) => {
+                self.saved_custom = preset;
+                let _ = self.preset_store.save_active(PresetKind::Custom);
+                self.preset_status = Some("Saved custom preset.".to_string());
+            }
+            Err(e) => {
+                self.preset_status = Some(format!("Save failed: {e}"));
+            }
+        }
     }
 
     fn effect_row(
@@ -248,25 +281,29 @@ impl eframe::App for UiState {
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Preset").strong());
-                    let previous_kind = self.config.kind();
-                    let mut selected = previous_kind;
+                    let current = self.config.kind();
                     egui::ComboBox::from_id_source("preset_kind")
-                        .selected_text(selected.label())
+                        .selected_text(current.label())
                         .show_ui(ui, |ui| {
                             for kind in PresetKind::ALL {
-                                ui.selectable_value(&mut selected, kind, kind.label());
+                                if ui.selectable_label(current == kind, kind.label()).clicked() {
+                                    self.select_preset(kind);
+                                }
                             }
                         });
-                    if selected != previous_kind {
-                        let preset = self.preset_store.load(selected);
-                        self.config.set(preset);
-                        self.custom_dirty = false;
-                        self.preset_status = None;
-                        let _ = self.preset_store.save_active(selected);
-                    }
-                    if self.custom_dirty {
-                        ui.colored_label(Color32::from_rgb(220, 180, 40), "unsaved");
-                    }
+
+                    ui.with_layout(
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            let save_enabled = self.custom_needs_save();
+                            if ui
+                                .add_enabled(save_enabled, egui::Button::new("Save"))
+                                .clicked()
+                            {
+                                self.save_custom_preset();
+                            }
+                        },
+                    );
                 });
 
                 if let Some(msg) = &self.preset_status {
@@ -285,14 +322,6 @@ impl eframe::App for UiState {
                 let taxi_end_crossed = self.effects.taxi_end_crossed.load(Ordering::Relaxed);
 
                 self.config.with_mut_rumble(|cfg, kind| {
-                    let kind = if kind != PresetKind::Custom {
-                        self.custom_dirty = true;
-                        self.preset_status = None;
-                        PresetKind::Custom
-                    } else {
-                        kind
-                    };
-
                     UiState::effect_row(
                         ui,
                         "Base (airspeed)",
@@ -381,37 +410,11 @@ impl eframe::App for UiState {
                         &mut _changed,
                     );
 
-                    kind
-                });
-
-                ui.horizontal(|ui| {
-                    if ui.button("Reset preset").clicked() {
-                        let kind = self.config.kind();
-                        let preset = if kind == PresetKind::Custom {
-                            self.preset_store.load(PresetKind::Custom)
-                        } else {
-                            self.preset_store.reset_to_built_in(kind)
-                        };
-                        self.config.set(preset);
-                        self.custom_dirty = false;
+                    if _changed && kind != PresetKind::Custom {
                         self.preset_status = None;
-                    }
-                    let save_enabled =
-                        self.config.kind() == PresetKind::Custom && self.custom_dirty;
-                    if ui
-                        .add_enabled(save_enabled, egui::Button::new("Save preset"))
-                        .clicked()
-                    {
-                        let preset = self.config.get();
-                        match self.preset_store.save(&preset) {
-                            Ok(()) => {
-                                self.custom_dirty = false;
-                                self.preset_status = Some("Saved custom preset.".to_string());
-                            }
-                            Err(e) => {
-                                self.preset_status = Some(format!("Save failed: {e}"));
-                            }
-                        }
+                        PresetKind::Custom
+                    } else {
+                        kind
                     }
                 });
 
