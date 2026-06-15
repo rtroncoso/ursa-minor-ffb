@@ -3,7 +3,7 @@
 use ursa_minor_ffb::{
     hid::hid_worker,
     log::LogBuffer,
-    preset::{PresetShared, PresetStore},
+    preset::{PresetKind, PresetShared, PresetStore},
     sim::sim_worker,
     ui::{Tab, UiState},
     EffectsShared, EffectsState, FlightVars, HidCmd, UiCmd,
