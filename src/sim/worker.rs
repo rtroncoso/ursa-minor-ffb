@@ -495,7 +495,6 @@ pub fn sim_worker(
                                     cfg_now.ias_deadband_kn,
                                 );
 
-                                *last_vars.lock() = Some(fv);
                                 *status.lock() = flight_status(&fv);
 
                                 let out = rumble_engine.step(
@@ -505,6 +504,7 @@ pub fn sim_worker(
                                     hold.load(Ordering::Relaxed),
                                 );
                                 effects.apply_snapshot(&out.effects);
+                                *last_vars.lock() = Some(fv);
                                 let _ = tx_hid.send(HidCmd::SendIntensity(out.intensity));
                             }
                         }
