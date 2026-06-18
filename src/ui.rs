@@ -3,7 +3,6 @@ use egui_extras::{Column, TableBuilder};
 
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use parking_lot::Mutex;
-use windows::Win32::Foundation::HWND;
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -11,6 +10,7 @@ use std::{
     },
     time::Duration,
 };
+use windows::Win32::Foundation::HWND;
 
 use crate::{
     tray, updater, ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, RumbleConfig,
@@ -101,39 +101,39 @@ pub struct UiState {
 }
 
 impl UiState {
-    fn kv_line(ui: &mut egui::Ui, k: &str, v: impl Into<String>) {
-        ui.label(RichText::new(format!("{}: {}", k, v.into())).strong());
-    }
-
     fn effect_row(
         ui: &mut egui::Ui,
         name: &str,
         val: &mut f32,
+        enabled: &mut bool,
         range: std::ops::RangeInclusive<f32>,
         active: bool,
         on_change: &mut bool,
     ) {
-        egui::Grid::new(format!("row_{}", name))
-            .num_columns(3)
-            .spacing(Vec2::new(12.0, 6.0))
-            .show(ui, |ui| {
-                ui.label(RichText::new(name).strong());
-                let desired_h = ui.style().spacing.interact_size.y;
-                let w = (ui.available_width() * 0.55).clamp(140.0, 320.0);
-                let slider = egui::Slider::new(val, range).trailing_fill(true);
-                if ui.add_sized([w, desired_h], slider).changed() {
+        ui.horizontal(|ui| {
+            let cb = ui.checkbox(enabled, "");
+            if cb.changed() {
+                *on_change = true;
+            }
+            
+            ui.label(RichText::new(name).strong());
+            
+            ui.add_enabled_ui(*enabled, |ui| {
+                let slider = egui::Slider::new(val, range)
+                    .trailing_fill(true)
+                    .show_value(true);
+                if ui.add(slider).changed() {
                     *on_change = true;
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let (color, filled) = if active {
-                        (Color32::WHITE, true)
-                    } else {
-                        (Color32::from_gray(90), false)
-                    };
-                    circle_indicator_colored(ui, color, filled);
-                });
-                ui.end_row();
             });
+            
+            let (color, filled) = if active && *enabled {
+                (Color32::WHITE, true)
+            } else {
+                (Color32::from_gray(90), false)
+            };
+            circle_indicator_colored(ui, color, filled);
+        });
     }
 
     fn taxi_bound_row(
@@ -144,38 +144,28 @@ impl UiState {
         active: bool,
         on_change: &mut bool,
     ) {
-        egui::Grid::new(format!("taxi_{}", name))
-            .num_columns(3)
-            .spacing(Vec2::new(12.0, 6.0))
-            .show(ui, |ui| {
-                ui.label(RichText::new(name).strong());
+        ui.horizontal(|ui| {
+            ui.add(egui::Label::new("  ").sense(egui::Sense::hover()));
+            
+            ui.label(RichText::new(name).strong());
+            
+            let mut tmp = *val as f32;
+            let r = (*range.start() as f32)..=(*range.end() as f32);
+            if ui
+                .add(egui::Slider::new(&mut tmp, r).trailing_fill(true).show_value(true))
+                .changed()
+            {
+                *val = tmp as f64;
+                *on_change = true;
+            }
 
-                let desired_h = ui.style().spacing.interact_size.y;
-                let w = (ui.available_width() * 0.55).clamp(140.0, 320.0);
-
-                let mut tmp = *val as f32;
-                let r = (*range.start() as f32)..=(*range.end() as f32);
-                if ui
-                    .add_sized(
-                        [w, desired_h],
-                        egui::Slider::new(&mut tmp, r).trailing_fill(true),
-                    )
-                    .changed()
-                {
-                    *val = tmp as f64;
-                    *on_change = true;
-                }
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let (color, filled) = if active {
-                        (Color32::WHITE, true)
-                    } else {
-                        (Color32::from_gray(90), false)
-                    };
-                    circle_indicator_colored(ui, color, filled);
-                });
-                ui.end_row();
-            });
+            let (color, filled) = if active {
+                (Color32::WHITE, true)
+            } else {
+                (Color32::from_gray(90), false)
+            };
+            circle_indicator_colored(ui, color, filled);
+        });
     }
 }
 
@@ -234,7 +224,7 @@ impl eframe::App for UiState {
             });
         });
 
-        let show_main = true;
+       let show_main = self.active_tab == Tab::Main;
         #[cfg(debug_assertions)]
         let show_debug = self.active_tab == Tab::Debug;
         #[cfg(not(debug_assertions))]
@@ -243,150 +233,247 @@ impl eframe::App for UiState {
 
         if show_main {
             egui::CentralPanel::default().show(ctx, |ui| {
-                ui.heading("Rumble Effects");
-                ui.add_space(4.0);
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.heading("Rumble Effects");
+                        ui.add_space(4.0);
 
-                let mut _changed = false;
+                        let mut _changed = false;
 
-                let ground_active = self.effects.ground_active.load(Ordering::Relaxed);
-                let ground_thump_active = self.effects.ground_thump_active.load(Ordering::Relaxed);
-                let taxi_start_crossed = self.effects.taxi_start_crossed.load(Ordering::Relaxed);
-                let taxi_end_crossed = self.effects.taxi_end_crossed.load(Ordering::Relaxed);
+                        let ground_active = self.effects.ground_active.load(Ordering::Relaxed);
+                        let ground_thump_active = self.effects.ground_thump_active.load(Ordering::Relaxed);
+                        let taxi_start_crossed = self.effects.taxi_start_crossed.load(Ordering::Relaxed);
+                        let taxi_end_crossed = self.effects.taxi_end_crossed.load(Ordering::Relaxed);
 
-                self.config.with_mut(|cfg| {
-                    UiState::effect_row(
-                        ui,
-                        "Base (airspeed)",
-                        &mut cfg.base_airspeed,
-                        0.0..=80.0,
-                        self.effects.base_active.load(Ordering::Relaxed),
-                        &mut _changed,
-                    );
-                    UiState::effect_row(
-                        ui,
-                        "Ground Roll",
-                        &mut cfg.ground_roll,
-                        0.0..=200.0,
-                        ground_active || ground_thump_active,
-                        &mut _changed,
-                    );
+                        self.config.with_mut(|cfg| {
+                            // Overspeed
+                            let mut overspeed_enabled = cfg.overspeed_enabled;
+                            
+                            UiState::effect_row(
+                                ui,
+                                "Overspeed",
+                                &mut cfg.overspeed_threshold_kn,
+                                &mut overspeed_enabled,
+                                0.0..=2000.0,
+                                self.effects.base_active.load(Ordering::Relaxed),
+                                &mut _changed,
+                            );
+                            cfg.overspeed_enabled = overspeed_enabled;
 
-                    ui.add_space(2.0);
+                            ui.add_space(8.0);
 
-                    {
-                        let mut start = cfg.taxi_start_kn;
-                        let mut end = cfg.taxi_end_kn;
+                            // Ground Roll
+                            let mut ground_enabled = cfg.ground_enabled;
+                            UiState::effect_row(
+                                ui,
+                                "Ground Roll",
+                                &mut cfg.ground_roll,
+                                &mut ground_enabled,
+                                0.0..=200.0,
+                                ground_active || ground_thump_active,
+                                &mut _changed,
+                            );
+                            cfg.ground_enabled = ground_enabled;
 
-                        UiState::taxi_bound_row(
-                            ui,
-                            "Taxi thump start (kt)",
-                            &mut start,
-                            0.0..=20.0,
-                            taxi_start_crossed,
-                            &mut _changed,
-                        );
+                            ui.add_space(8.0);
 
-                        if start >= end - 0.5 {
-                            end = (start + 0.5).min(60.0);
-                        }
+                            // Taxi thump bounds
+                            ui.label(RichText::new("Taxi Thump Settings").heading());
+                            ui.add_space(4.0);
+                            
+                            {
+                                let mut start = cfg.taxi_start_kn;
+                                let mut end = cfg.taxi_end_kn;
 
-                        UiState::taxi_bound_row(
-                            ui,
-                            "Taxi thump end (kt)",
-                            &mut end,
-                            1.0..=60.0,
-                            taxi_end_crossed,
-                            &mut _changed,
-                        );
+                                UiState::taxi_bound_row(
+                                    ui,
+                                    "Start (kt)",
+                                    &mut start,
+                                    0.0..=20.0,
+                                    taxi_start_crossed,
+                                    &mut _changed,
+                                );
 
-                        if end <= start + 0.5 {
-                            start = (end - 0.5).max(0.0);
-                        }
+                                if start >= end - 0.5 {
+                                    end = (start + 0.5).min(250.0);
+                                }
 
-                        cfg.taxi_start_kn = start.clamp(0.0, 59.0);
-                        cfg.taxi_end_kn = end.clamp(cfg.taxi_start_kn + 0.5, 60.0);
-                    }
+                                UiState::taxi_bound_row(
+                                    ui,
+                                    "End (kt)",
+                                    &mut end,
+                                    1.0..=250.0, // Изменили верхний порог слайдера до 250
+                                    taxi_end_crossed,
+                                    &mut _changed,
+                                );
 
-                    ui.add_space(6.0);
+                                if end <= start + 0.5 {
+                                    start = (end - 0.5).max(0.0);
+                                }
 
-                    UiState::effect_row(
-                        ui,
-                        "Flaps (bump)",
-                        &mut cfg.flaps_peak,
-                        0.0..=255.0,
-                        self.effects.flaps_bump_active.load(Ordering::Relaxed),
-                        &mut _changed,
-                    );
-                    UiState::effect_row(
-                        ui,
-                        "Landing Gear (bump)",
-                        &mut cfg.gear_peak,
-                        0.0..=255.0,
-                        self.effects.gear_bump_active.load(Ordering::Relaxed),
-                        &mut _changed,
-                    );
-                    UiState::effect_row(
-                        ui,
-                        "Stall ceiling",
-                        &mut cfg.stall_ceiling,
-                        0.0..=255.0,
-                        self.effects.stall_active.load(Ordering::Relaxed),
-                        &mut _changed,
-                    );
-                    UiState::effect_row(
-                        ui,
-                        "Bank / Turb",
-                        &mut cfg.bank,
-                        0.0..=200.0,
-                        self.effects.bank_active.load(Ordering::Relaxed),
-                        &mut _changed,
-                    );
-                });
+                                cfg.taxi_start_kn = start.clamp(0.0, 249.5);
+                                cfg.taxi_end_kn = end.clamp(cfg.taxi_start_kn + 0.5, 250.0); // Изменили clamp до 250
+                            }
 
-                ui.horizontal(|ui| {
-                    if ui.button("Reset to defaults").clicked() {
-                        self.config.set(RumbleConfig::default());
-                    }
-                });
+                            ui.add_space(8.0);
 
-                ui.separator();
+                            // Flaps effect
+                            let mut flaps_enabled = cfg.flaps_enabled;
+                            UiState::effect_row(
+                                ui,
+                                "Flaps (bump)",
+                                &mut cfg.flaps_peak,
+                                &mut flaps_enabled,
+                                0.0..=255.0,
+                                self.effects.flaps_bump_active.load(Ordering::Relaxed),
+                                &mut _changed,
+                            );
+                            cfg.flaps_enabled = flaps_enabled;
 
-                ui.heading("Live Aircraft Data");
-                let v = *self.last_vars.lock();
-                match v {
-                    Some(v) => {
-                        UiState::kv_line(
-                            ui,
-                            "Airspeed (kt)",
-                            format!("{:.1}", v.airspeed_indicated),
-                        );
-                        UiState::kv_line(ui, "GS (kt)", format!("{:.1}", v.ground_speed_kt));
-                        UiState::kv_line(ui, "On Ground", v.on_ground.to_string());
-                        UiState::kv_line(ui, "Bank (°)", format!("{:.1}", v.bank_deg));
-                        UiState::kv_line(ui, "Flaps (%)", format!("{:.0}", v.flaps_pct));
-                        UiState::kv_line(
-                            ui,
-                            "Gear",
-                            if v.gear_handle > 0.5 {
-                                "Down".to_string()
-                            } else {
-                                "Up".to_string()
-                            },
-                        );
-                        UiState::kv_line(ui, "Stall", v.stalled.to_string());
-                        UiState::kv_line(ui, "Paused", v.paused.to_string());
-                    }
-                    None => {
-                        UiState::kv_line(ui, "Airspeed (kt)", "—");
-                        UiState::kv_line(ui, "GS (kt)", "—");
-                        UiState::kv_line(ui, "On Ground", "—");
-                        UiState::kv_line(ui, "Bank (°)", "—");
-                        UiState::kv_line(ui, "Flaps (%)", "—");
-                        UiState::kv_line(ui, "Gear", "—");
-                        UiState::kv_line(ui, "Stall", "—");
-                        UiState::kv_line(ui, "Paused", "—");
-                    }
-                }
+                            // Gear effect
+                            let mut gear_enabled = cfg.gear_enabled;
+                            UiState::effect_row(
+                                ui,
+                                "Landing Gear (bump)",
+                                &mut cfg.gear_peak,
+                                &mut gear_enabled,
+                                0.0..=255.0,
+                                self.effects.gear_bump_active.load(Ordering::Relaxed),
+                                &mut _changed,
+                            );
+                            cfg.gear_enabled = gear_enabled;
+
+                            // Stall effect
+                            let mut stall_enabled = cfg.stall_enabled;
+                            UiState::effect_row(
+                                ui,
+                                "Stall ceiling",
+                                &mut cfg.stall_ceiling,
+                                &mut stall_enabled,
+                                0.0..=255.0,
+                                self.effects.stall_active.load(Ordering::Relaxed),
+                                &mut _changed,
+                            );
+                            cfg.stall_enabled = stall_enabled;
+
+                            // Spoilers effect
+                            let mut spoilers_enabled = cfg.spoilers_enabled;
+                            UiState::effect_row(
+                                ui,
+                                "Spoilers Airflow",
+                                &mut cfg.spoilers_intensity,
+                                &mut spoilers_enabled,
+                                0.0..=250.0,
+                                self.effects.spoilers_active.load(Ordering::Relaxed),
+                                &mut _changed,
+                            );
+                            cfg.spoilers_enabled = spoilers_enabled;
+
+                            ui.add_space(8.0);
+
+                            // Bank effect - только чекбокс и порог
+                            let mut bank_enabled = cfg.bank_enabled;
+                            ui.horizontal(|ui| {
+                                let cb = ui.checkbox(&mut bank_enabled, "");
+                                if cb.changed() {
+                                    _changed = true;
+                                }
+                                
+                                ui.label(RichText::new("Bank / Turb").strong());
+                                
+                                let active = self.effects.bank_active.load(Ordering::Relaxed);
+                                let (color, filled) = if active && bank_enabled {
+                                    (Color32::WHITE, true)
+                                } else {
+                                    (Color32::from_gray(90), false)
+                                };
+                                circle_indicator_colored(ui, color, filled);
+                            });
+                            cfg.bank_enabled = bank_enabled;
+
+                            // Bank threshold slider - диапазон 0..90°
+                            ui.horizontal(|ui| {
+                                ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
+                                ui.label(RichText::new("Threshold (°):").strong());
+                                let mut threshold = cfg.bank_threshold_deg;
+                                if ui.add(egui::Slider::new(&mut threshold, 0.0..=90.0)
+                                    .trailing_fill(true)
+                                    .show_value(true))
+                                    .changed() 
+                                {
+                                    cfg.bank_threshold_deg = threshold;
+                                    _changed = true;
+                                }
+                            });
+
+                            if _changed {
+                                // Конфиг уже обновлен через with_mut
+                            }
+                        });
+
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Reset to defaults").clicked() {
+                                self.config.set(RumbleConfig::default());
+                            }
+                        });
+
+                        ui.separator();
+
+                        ui.heading("Live Aircraft Data");
+                        
+                        egui::Grid::new("aircraft_data")
+                            .num_columns(2)
+                            .spacing(Vec2::new(20.0, 4.0))
+                            .show(ui, |ui| {
+                                let v = *self.last_vars.lock();
+                                match v {
+                                    Some(v) => {
+                                        ui.label("Airspeed (kt):");
+                                        ui.label(format!("{:.1}", v.airspeed_indicated));
+                                        ui.end_row();
+                                        
+                                        ui.label("GS (kt):");
+                                        ui.label(format!("{:.1}", v.ground_speed_kt));
+                                        ui.end_row();
+                                        
+                                        ui.label("On Ground:");
+                                        ui.label(v.on_ground.to_string());
+                                        ui.end_row();
+                                        
+                                        ui.label("Bank (°):");
+                                        ui.label(format!("{:.1}", v.bank_deg));
+                                        ui.end_row();
+                                        
+                                        ui.label("Flaps (%):");
+                                        ui.label(format!("{:.0}", v.flaps_pct));
+                                        ui.end_row();
+                                        
+                                        ui.label("Gear:");
+                                        ui.label(if v.gear_handle > 0.5 { "Down" } else { "Up" });
+                                        ui.end_row();
+
+                                        ui.label("Spoilers (%):");
+                                        ui.label(format!("{:.0}", v.spoilers_pct));
+                                        ui.end_row();
+                                        
+                                        ui.label("Stall:");
+                                        ui.label(v.stalled.to_string());
+                                        ui.end_row();
+                                        
+                                        ui.label("Paused:");
+                                        ui.label(v.paused.to_string());
+                                        ui.end_row();
+                                    }
+                                    None => {
+                                        ui.label("No data");
+                                        ui.label("");
+                                        ui.end_row();
+                                    }
+                                }
+                            });
+                    });
             });
         }
 

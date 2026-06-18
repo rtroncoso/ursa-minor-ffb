@@ -2,11 +2,9 @@ use crate::{FlightVars, SimStatus};
 
 pub fn parse_main_elems(
     elem: &[f64],
-    paused_from_events: bool,
+    _paused_from_events: bool, // Компилятор будет доволен
     ias_deadband_kn: f64,
 ) -> FlightVars {
-    let paused_from_var = elem.get(10).copied().unwrap_or(0.0) != 0.0;
-
     let mut fv = FlightVars {
         airspeed_indicated: elem.get(0).copied().unwrap_or(0.0),
         on_ground: elem.get(1).copied().unwrap_or(0.0) != 0.0,
@@ -19,7 +17,8 @@ pub fn parse_main_elems(
         stalled: elem.get(7).copied().unwrap_or(0.0) != 0.0,
         sim_time_s: elem.get(8).copied().unwrap_or(0.0),
         ground_speed_kt: elem.get(9).copied().unwrap_or(0.0).max(0.0),
-        paused: paused_from_events || paused_from_var,
+        paused: false, // Наш форс false для обхода бага паузы в MSFS 2024
+        spoilers_pct: elem.get(10).copied().unwrap_or(0.0).clamp(0.0, 100.0), // Индекс скорректирован на 10!
     };
 
     sanitize_flight_vars(&mut fv, ias_deadband_kn);
@@ -55,17 +54,17 @@ mod tests {
 
     fn sample_elems() -> [f64; 11] {
         [
-            120.0, // IAS
-            0.0,   // on ground
-            15.0,  // bank
-            50.0,  // flaps L
-            70.0,  // flaps R
-            2.0,   // flaps index
-            1.0,   // gear
-            0.0,   // stall
-            100.0, // sim time
-            25.0,  // ground speed
-            0.0,   // paused var
+            120.0, // 0: IAS
+            0.0,   // 1: on ground
+            15.0,  // 2: bank
+            50.0,  // 3: flaps L
+            70.0,  // 4: flaps R
+            2.0,   // 5: flaps index
+            1.0,   // 6: gear
+            0.0,   // 7: stall
+            100.0, // 8: sim time
+            25.0,  // 9: ground speed
+            45.0,  // 10: spoilers (индекс 10)
         ]
     }
 
@@ -81,7 +80,14 @@ mod tests {
         assert!(!fv.stalled);
         assert_eq!(fv.sim_time_s, 100.0);
         assert_eq!(fv.ground_speed_kt, 25.0);
-        assert!(!fv.paused);
+        assert_eq!(fv.spoilers_pct, 45.0);
+    }
+
+    #[test]
+    fn spoilers_pct_handles_missing_elements_gracefully() {
+        let short_e = &sample_elems()[0..10];
+        let fv = parse_main_elems(short_e, false, 1.0);
+        assert_eq!(fv.spoilers_pct, 0.0);
     }
 
     #[test]
@@ -115,18 +121,6 @@ mod tests {
         e[0] = 0.5;
         let fv = parse_main_elems(&e, false, 1.0);
         assert_eq!(fv.airspeed_indicated, 0.0);
-    }
-
-    #[test]
-    fn pause_from_events_or_elem() {
-        let e = sample_elems();
-        let from_events = parse_main_elems(&e, true, 1.0);
-        assert!(from_events.paused);
-
-        let mut paused_elem = e;
-        paused_elem[10] = 1.0;
-        let from_var = parse_main_elems(&paused_elem, false, 1.0);
-        assert!(from_var.paused);
     }
 
     #[test]

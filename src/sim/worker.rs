@@ -11,11 +11,9 @@ use crossbeam_channel::Sender;
 use libloading::Library;
 use parking_lot::Mutex;
 
-use crate::rumble::RumbleEngine;
+use crate::RumbleEngine;
 use crate::sim::parse::{flight_status, parse_main_elems};
-use crate::{
-    ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus,
-};
+use crate::{ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus};
 
 type DWord = u32;
 type HRESULT = i32;
@@ -286,7 +284,7 @@ pub fn sim_worker(
                 )
             };
 
-            let defs = [
+           let defs = [
                 ("AIRSPEED INDICATED", "Knots"),
                 ("SIM ON GROUND", "Bool"),
                 ("PLANE BANK DEGREES", "Degrees"),
@@ -297,7 +295,8 @@ pub fn sim_worker(
                 ("STALL WARNING", "Bool"),
                 ("ABSOLUTE TIME", "Seconds"),
                 ("GROUND VELOCITY", "Knots"),
-                ("PAUSED", "Bool"),
+                // Строку "PAUSED" удалили. Теперь спойлеры железно сидят на 11-м месте (индекс 10)
+                ("SPOILERS HANDLE POSITION", "Percent"),
             ];
             for (name, unit) in defs {
                 let hr = add(DEF_MAIN, name, unit);
@@ -472,11 +471,11 @@ pub fn sim_worker(
                                     continue;
                                 }
 
-                                let mut elem = [0f64; 11];
+                                let mut elem = [0f64; 12];
                                 if want_f64 {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f64,
-                                        count.min(11),
+                                        count.min(12),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x;
@@ -484,7 +483,7 @@ pub fn sim_worker(
                                 } else {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f32,
-                                        count.min(11),
+                                        count.min(12),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x as f64;

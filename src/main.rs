@@ -12,7 +12,7 @@ use anyhow::Result;
 use crossbeam_channel::unbounded;
 use parking_lot::Mutex;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool},
     Arc,
 };
 use std::{thread, time::Duration};
@@ -71,10 +71,10 @@ fn main() -> Result<()> {
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([478.0, 520.0])
-            .with_min_inner_size([400.0, 420.0])
-            .with_resizable(false)
-            .with_maximize_button(false)
+            .with_inner_size([550.0, 700.0]) // Увеличили размер окна
+            .with_min_inner_size([480.0, 600.0]) // Увеличили минимальный размер
+            .with_resizable(true) // Разрешили изменение размера
+            .with_maximize_button(true)
             .with_minimize_button(true),
         ..Default::default()
     };

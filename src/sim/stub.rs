@@ -1,14 +1,9 @@
-use std::sync::{
-    atomic::AtomicBool,
-    Arc,
-};
+use std::sync::{atomic::AtomicBool, Arc};
 
 use crossbeam_channel::Sender;
 use parking_lot::Mutex;
 
-use crate::{
-    ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus,
-};
+use crate::{ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus};
 
 pub fn sim_worker(
     _last_vars: Arc<Mutex<Option<FlightVars>>>,

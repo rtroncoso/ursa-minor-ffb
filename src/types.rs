@@ -16,16 +16,29 @@ pub struct FlightVars {
     pub stalled: bool,
     pub ground_speed_kt: f64,
     pub paused: bool,
+    pub spoilers_pct: f64, // Положение спойлеров в % (0.0 - 100.0)
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RumbleConfig {
-    pub base_airspeed: f32,
+    pub overspeed_enabled: bool,
+    pub overspeed_threshold_kn: f32,
+    pub overspeed_intensity: f32,
+    pub overspeed_max_kn: f32,
+    
+    pub bank_enabled: bool,
+    pub bank_intensity: f32,        
+    pub bank_threshold_deg: f32,    
+    
+    // Настройки спойлеров
+    pub spoilers_enabled: bool,
+    pub spoilers_intensity: f32,    
+    pub spoilers_threshold_pct: f64, 
+
     pub ground_roll: f32,
     pub flaps_peak: f32,
     pub gear_peak: f32,
     pub stall_ceiling: f32,
-    pub bank: f32,
     pub max_output: u8,
     pub smoothing_alpha: f32,
     pub ias_deadband_kn: f64,
@@ -37,17 +50,35 @@ pub struct RumbleConfig {
     pub flaps_bump_duration_s: f64,
     pub flaps_bump_eps_pct: f64,
     pub gear_bump_duration_s: f64,
+
+    pub ground_enabled: bool,
+    pub flaps_enabled: bool,
+    pub gear_enabled: bool,
+    pub stall_enabled: bool,
+
+    pub is_combat_edition: bool,
 }
 
 impl Default for RumbleConfig {
     fn default() -> Self {
         Self {
-            base_airspeed: 16.0,
+            overspeed_enabled: true,
+            overspeed_threshold_kn: 250.0,
+            overspeed_intensity: 100.0,
+            overspeed_max_kn: 350.0,
+            
+            bank_enabled: true,
+            bank_intensity: 70.0,
+            bank_threshold_deg: 45.0,
+            
+            spoilers_enabled: true,
+            spoilers_intensity: 150.0, 
+            spoilers_threshold_pct: 5.0,
+
             ground_roll: 38.0,
             flaps_peak: 60.0,
             gear_peak: 110.0,
             stall_ceiling: 160.0,
-            bank: 70.0,
             max_output: 255,
             smoothing_alpha: 0.18,
             ias_deadband_kn: 1.0,
@@ -59,6 +90,12 @@ impl Default for RumbleConfig {
             flaps_bump_duration_s: 1.0,
             flaps_bump_eps_pct: 2.0,
             gear_bump_duration_s: 0.8,
+
+            ground_enabled: true,
+            flaps_enabled: true,
+            gear_enabled: true,
+            stall_enabled: true,
+            is_combat_edition: false,
         }
     }
 }
@@ -74,6 +111,7 @@ pub struct EffectsSnapshot {
     pub base_active: bool,
     pub bank_active: bool,
     pub stall_active: bool,
+    pub spoilers_active: bool, 
 }
 
 #[derive(Debug)]
@@ -109,8 +147,11 @@ impl ConfigShared {
 
     pub fn with_mut<F: FnOnce(&mut RumbleConfig)>(&self, f: F) {
         let mut g = self.inner.lock();
+        let before = g.clone();
         f(&mut g);
-        self.rev.fetch_add(1, Ordering::Relaxed);
+        if *g != before {
+            self.rev.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     pub fn current_rev(&self) -> u64 {
@@ -129,27 +170,23 @@ pub struct EffectsState {
     pub base_active: AtomicBool,
     pub bank_active: AtomicBool,
     pub stall_active: AtomicBool,
+    pub spoilers_active: AtomicBool, 
 }
 
 pub type EffectsShared = Arc<EffectsState>;
 
 impl EffectsState {
     pub fn apply_snapshot(&self, snap: &EffectsSnapshot) {
-        self.flaps_bump_active
-            .store(snap.flaps_bump_active, Ordering::Relaxed);
-        self.gear_bump_active
-            .store(snap.gear_bump_active, Ordering::Relaxed);
-        self.ground_active
-            .store(snap.ground_active, Ordering::Relaxed);
-        self.ground_thump_active
-            .store(snap.ground_thump_active, Ordering::Relaxed);
-        self.taxi_start_crossed
-            .store(snap.taxi_start_crossed, Ordering::Relaxed);
-        self.taxi_end_crossed
-            .store(snap.taxi_end_crossed, Ordering::Relaxed);
+        self.flaps_bump_active.store(snap.flaps_bump_active, Ordering::Relaxed);
+        self.gear_bump_active.store(snap.gear_bump_active, Ordering::Relaxed);
+        self.ground_active.store(snap.ground_active, Ordering::Relaxed);
+        self.ground_thump_active.store(snap.ground_thump_active, Ordering::Relaxed);
+        self.taxi_start_crossed.store(snap.taxi_start_crossed, Ordering::Relaxed);
+        self.taxi_end_crossed.store(snap.taxi_end_crossed, Ordering::Relaxed);
         self.base_active.store(snap.base_active, Ordering::Relaxed);
         self.bank_active.store(snap.bank_active, Ordering::Relaxed);
         self.stall_active.store(snap.stall_active, Ordering::Relaxed);
+        self.spoilers_active.store(snap.spoilers_active, Ordering::Relaxed); 
     }
 
     pub fn clear_all(&self) {

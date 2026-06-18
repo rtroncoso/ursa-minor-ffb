@@ -11,5 +11,6 @@ pub mod ui;
 #[cfg(all(windows, feature = "app"))]
 pub mod updater;
 
-pub use types::*;
 pub use log::LogBuffer;
+pub use types::*;
+pub use rumble::RumbleEngine; // Делаем структуру доступной для worker.rs через crate::RumbleEngine

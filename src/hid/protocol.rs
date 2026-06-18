@@ -34,6 +34,13 @@ pub fn is_ursa_minor_right(pid: u16) -> bool {
 }
 
 pub fn handed_selector_for_pid(pid: u16) -> u8 {
+    // --- НАШ ХАК ДЛЯ COMBAT ВЕРСИИ ---
+    // Если подключен Fighter R (PID 0xBC2A), отдаем перехваченный байт 0x0A
+    if pid == WW_PID_URSA_MINOR_FIGHTER_R {
+        return 0x0A;
+    }
+
+    // Для всех остальных джойстиков сохраняем оригинальную логику
     if is_ursa_minor_right(pid) {
         0x08
     } else if is_ursa_minor_left(pid) {
@@ -84,7 +91,10 @@ mod tests {
         let frame = build_simapp_vibe_frame(WW_PID_URSA_MINOR_AIRBUS_L, 0x02, 14, 0x19);
         assert_eq!(frame.len(), 14);
         assert_eq!(frame[0], 0x02);
-        assert_eq!(&frame[1..], &[0x07, 0xBF, 0x00, 0x00, 0x03, 0x49, 0x00, 0x19, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            &frame[1..],
+            &[0x07, 0xBF, 0x00, 0x00, 0x03, 0x49, 0x00, 0x19, 0, 0, 0, 0, 0]
+        );
     }
 
     #[test]
@@ -141,8 +151,14 @@ mod tests {
 
     #[test]
     fn model_names_for_known_pids() {
-        assert_eq!(ursa_model_name(WW_PID_URSA_MINOR_AIRBUS_L), "URSA MINOR AIRBUS L");
-        assert_eq!(ursa_model_name(WW_PID_URSA_MINOR_SPACE_R), "URSA MINOR SPACE R");
+        assert_eq!(
+            ursa_model_name(WW_PID_URSA_MINOR_AIRBUS_L),
+            "URSA MINOR AIRBUS L"
+        );
+        assert_eq!(
+            ursa_model_name(WW_PID_URSA_MINOR_SPACE_R),
+            "URSA MINOR SPACE R"
+        );
         assert_eq!(ursa_model_name(0x0000), "UNKNOWN");
     }
 }
