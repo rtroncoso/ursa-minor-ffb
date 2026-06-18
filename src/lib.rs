@@ -13,5 +13,5 @@ pub mod ui;
 pub mod updater;
 
 pub use log::LogBuffer;
-pub use preset::{Preset, PresetKind, PresetShared, PresetStore, SimVarLayout, SimVarProfile};
+pub use preset::{LayoutField, Preset, PresetKind, PresetShared, PresetStore, SimVarLayout, SimVarProfile};
 pub use types::*;

@@ -15,7 +15,13 @@ pub struct FlightVars {
     pub gear_handle: f64,
     pub stalled: bool,
     pub ground_speed_kt: f64,
+    pub wind_kt: f64,
+    pub wind_dir_deg: f64,
     pub paused: bool,
+    /// Highest `GENERAL ENG RPM:N` among subscribed extras (twin/turboprop uses max engine).
+    pub eng_rpm: f64,
+    /// `NUMBER OF ENGINES` when available from the sim.
+    pub num_engines: u32,
     pub extras: HashMap<String, f64>,
 }
 
@@ -38,6 +44,48 @@ pub struct RumbleConfig {
     pub flaps_bump_duration_s: f64,
     pub flaps_bump_eps_pct: f64,
     pub gear_bump_duration_s: f64,
+    #[serde(default = "default_ground_spoilers")]
+    pub ground_spoilers: f32,
+    #[serde(default = "default_engine_vibe")]
+    pub engine_vibe: f32,
+    #[serde(default = "default_engine_idle_n1_pct")]
+    pub engine_idle_n1_pct: f32,
+    #[serde(default = "default_eng_rpm_spool_min")]
+    pub eng_rpm_spool_min: f32,
+    #[serde(default = "default_eng_rpm_startup_max")]
+    pub eng_rpm_startup_max: f32,
+    #[serde(default = "default_eng_rpm_idle")]
+    pub eng_rpm_idle: f32,
+    #[serde(default = "default_eng_rpm_max")]
+    pub eng_rpm_max: f32,
+}
+
+fn default_eng_rpm_spool_min() -> f32 {
+    800.0
+}
+
+fn default_eng_rpm_startup_max() -> f32 {
+    900.0
+}
+
+fn default_eng_rpm_idle() -> f32 {
+    5500.0
+}
+
+fn default_eng_rpm_max() -> f32 {
+    11000.0
+}
+
+fn default_ground_spoilers() -> f32 {
+    40.0
+}
+
+fn default_engine_vibe() -> f32 {
+    14.0
+}
+
+fn default_engine_idle_n1_pct() -> f32 {
+    22.0
 }
 
 impl Default for RumbleConfig {
@@ -60,6 +108,13 @@ impl Default for RumbleConfig {
             flaps_bump_duration_s: 1.0,
             flaps_bump_eps_pct: 2.0,
             gear_bump_duration_s: 0.8,
+            ground_spoilers: default_ground_spoilers(),
+            engine_vibe: default_engine_vibe(),
+            engine_idle_n1_pct: default_engine_idle_n1_pct(),
+            eng_rpm_spool_min: default_eng_rpm_spool_min(),
+            eng_rpm_startup_max: default_eng_rpm_startup_max(),
+            eng_rpm_idle: default_eng_rpm_idle(),
+            eng_rpm_max: default_eng_rpm_max(),
         }
     }
 }
@@ -75,6 +130,9 @@ pub struct EffectsSnapshot {
     pub base_active: bool,
     pub bank_active: bool,
     pub stall_active: bool,
+    pub spoilers_boost_active: bool,
+    pub turb_thump_active: bool,
+    pub engine_vibe_active: bool,
 }
 
 #[derive(Debug)]
@@ -97,6 +155,9 @@ pub struct EffectsState {
     pub base_active: AtomicBool,
     pub bank_active: AtomicBool,
     pub stall_active: AtomicBool,
+    pub spoilers_boost_active: AtomicBool,
+    pub turb_thump_active: AtomicBool,
+    pub engine_vibe_active: AtomicBool,
 }
 
 pub type EffectsShared = Arc<EffectsState>;
@@ -119,6 +180,12 @@ impl EffectsState {
         self.bank_active.store(snap.bank_active, Ordering::Relaxed);
         self.stall_active
             .store(snap.stall_active, Ordering::Relaxed);
+        self.spoilers_boost_active
+            .store(snap.spoilers_boost_active, Ordering::Relaxed);
+        self.turb_thump_active
+            .store(snap.turb_thump_active, Ordering::Relaxed);
+        self.engine_vibe_active
+            .store(snap.engine_vibe_active, Ordering::Relaxed);
     }
 
     pub fn clear_all(&self) {

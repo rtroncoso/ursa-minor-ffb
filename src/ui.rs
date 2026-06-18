@@ -406,7 +406,24 @@ impl eframe::App for UiState {
                         "Bank / Turb",
                         &mut cfg.bank,
                         0.0..=200.0,
-                        self.effects.bank_active.load(Ordering::Relaxed),
+                        self.effects.bank_active.load(Ordering::Relaxed)
+                            || self.effects.turb_thump_active.load(Ordering::Relaxed),
+                        &mut _changed,
+                    );
+                    UiState::effect_row(
+                        ui,
+                        "Ground Spoilers",
+                        &mut cfg.ground_spoilers,
+                        0.0..=100.0,
+                        self.effects.spoilers_boost_active.load(Ordering::Relaxed),
+                        &mut _changed,
+                    );
+                    UiState::effect_row(
+                        ui,
+                        "Engine",
+                        &mut cfg.engine_vibe,
+                        0.0..=40.0,
+                        self.effects.engine_vibe_active.load(Ordering::Relaxed),
                         &mut _changed,
                     );
 
@@ -421,6 +438,10 @@ impl eframe::App for UiState {
                 ui.separator();
 
                 ui.heading("Live Aircraft Data");
+                let ac = self.aircraft_title.lock().clone();
+                if !ac.is_empty() {
+                    UiState::kv_line(ui, "Aircraft", ac);
+                }
                 let v = self.last_vars.lock().clone();
                 match v {
                     Some(v) => {
@@ -432,6 +453,24 @@ impl eframe::App for UiState {
                         UiState::kv_line(ui, "GS (kt)", format!("{:.1}", v.ground_speed_kt));
                         UiState::kv_line(ui, "On Ground", v.on_ground.to_string());
                         UiState::kv_line(ui, "Bank (°)", format!("{:.1}", v.bank_deg));
+                        UiState::kv_line(ui, "Wind (kt)", format!("{:.1}", v.wind_kt));
+                        UiState::kv_line(ui, "Wind from (°)", format!("{:.0}", v.wind_dir_deg));
+                        UiState::kv_line(ui, "Eng RPM", format!("{:.0}", v.eng_rpm));
+                        if v.num_engines > 0 {
+                            UiState::kv_line(ui, "Engines", v.num_engines.to_string());
+                        }
+                        if let Some(pct) = v.extras.get("spoilers_pct") {
+                            UiState::kv_line(ui, "Spoilers (%)", format!("{:.0}", pct));
+                        }
+                        if let Some(n1) = v.extras.get("eng_n1_1") {
+                            UiState::kv_line(ui, "N1 (%)", format!("{:.1}", n1));
+                        }
+                        if let Some(n2) = v.extras.get("eng_n2_1") {
+                            UiState::kv_line(ui, "N2 (%)", format!("{:.1}", n2));
+                        }
+                        if let Some(thr) = v.extras.get("eng_throttle_1") {
+                            UiState::kv_line(ui, "Throttle (%)", format!("{:.1}", thr));
+                        }
                         UiState::kv_line(ui, "Flaps (%)", format!("{:.0}", v.flaps_pct));
                         UiState::kv_line(
                             ui,
@@ -450,6 +489,7 @@ impl eframe::App for UiState {
                         UiState::kv_line(ui, "GS (kt)", "—");
                         UiState::kv_line(ui, "On Ground", "—");
                         UiState::kv_line(ui, "Bank (°)", "—");
+                        UiState::kv_line(ui, "Wind (kt)", "—");
                         UiState::kv_line(ui, "Flaps (%)", "—");
                         UiState::kv_line(ui, "Gear", "—");
                         UiState::kv_line(ui, "Stall", "—");

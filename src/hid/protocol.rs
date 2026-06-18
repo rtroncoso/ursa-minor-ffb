@@ -43,6 +43,13 @@ pub fn handed_selector_for_pid(pid: u16) -> u8 {
     }
 }
 
+/// Minimum HID output report length for the simapp vibe intensity byte (body offset 7 → frame[8]).
+pub const MIN_VIBE_REPORT_LEN: u16 = 14;
+
+pub fn can_send_vibe(out_len: u16) -> bool {
+    out_len >= MIN_VIBE_REPORT_LEN
+}
+
 pub fn build_simapp_vibe_frame(pid: u16, report_id: u8, out_len: u16, intensity: u8) -> Vec<u8> {
     let handed_selector = handed_selector_for_pid(pid);
 
@@ -78,6 +85,12 @@ pub fn build_simapp_vibe_frame(pid: u16, report_id: u8, out_len: u16, intensity:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn can_send_vibe_requires_min_report_len() {
+        assert!(!can_send_vibe(13));
+        assert!(can_send_vibe(14));
+    }
 
     #[test]
     fn airbus_left_frame_matches_golden_bytes() {

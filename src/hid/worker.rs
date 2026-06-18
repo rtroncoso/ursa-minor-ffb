@@ -23,12 +23,16 @@ struct HidEntry {
     report_id: u8,
 }
 
-fn hid_send_out(devs: &[HidEntry], intensity: u8, _logs: &LogBuffer) -> (usize, usize) {
+fn is_vibe_interface(d: &HidEntry) -> bool {
+    d.usage_page == 0x0001 && d.usage == 0x0004
+}
+
+fn hid_send_out(devs: &[HidEntry], intensity: u8, logs: &LogBuffer) -> (usize, usize) {
     let mut ok = 0usize;
     let mut fail = 0usize;
 
     for d in devs {
-        if !(d.usage_page == 0x0001 && d.usage == 0x0004) {
+        if !is_vibe_interface(d) {
             continue;
         }
 
@@ -41,8 +45,15 @@ fn hid_send_out(devs: &[HidEntry], intensity: u8, _logs: &LogBuffer) -> (usize, 
                     fail += 1;
                 }
             }
-            Err(_) => {
+            Err(e) => {
                 fail += 1;
+                logs.push(format!(
+                    "HID: vibe write FAILED (PID=0x{:04X} {}, path='{}'): {}",
+                    d.pid,
+                    ursa_model_name(d.pid),
+                    d.path,
+                    e
+                ));
             }
         }
     }
@@ -60,7 +71,7 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
             a
         }
         Err(e) => {
-            logs.push(format!("HID: HidApi::new FAILED: {}", e));
+            logs.push(format!("HID: HidApi::new FAILED: {e}"));
             return;
         }
     };
@@ -74,7 +85,7 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
 
     let mut desired_intensity: u8 = 0;
     let mut last_sent_intensity: u8 = 255;
-    let mut last_send: Instant = Instant::now() - SEND_INTERVAL;
+    let mut last_send = Instant::now() - SEND_INTERVAL;
     let mut hold: bool = false;
     let mut prev_scan_sig = String::new();
 
@@ -89,7 +100,7 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
         }
 
         if let Err(e) = api.refresh_devices() {
-            logs.push(format!("HID: refresh_devices FAILED: {}", e));
+            logs.push(format!("HID: refresh_devices FAILED: {e}"));
         }
 
         let mut seen_paths: HashSet<String> = HashSet::new();
@@ -108,13 +119,8 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
 
             seen_paths.insert(path.clone());
             found_summary.push(format!(
-                "pid=0x{:04X} ({}) if#{} up=0x{:04X} u=0x{:04X} path='{}'",
-                pid,
+                "pid=0x{pid:04X} ({}) if#{ifnum} up=0x{up:04X} u=0x{u:04X} path='{path}'",
                 ursa_model_name(pid),
-                ifnum,
-                up,
-                u,
-                path
             ));
         }
 
@@ -150,7 +156,7 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
             let d = match devinfo.open_device(api) {
                 Ok(d) => d,
                 Err(e) => {
-                    logs.push(format!("HID: open failed on '{}' : {}", path, e));
+                    logs.push(format!("HID: open failed on '{path}' : {e}"));
                     continue;
                 }
             };
@@ -170,7 +176,7 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
                 "HID: device OPENED (VID=0x{:04X}, PID=0x{:04X} {}, if#{}, up=0x{:04X}, u=0x{:04X}, out_len={}, report_id=0x{:02X}) path='{}'",
                 devinfo.vendor_id(),
                 pid,
-                format!("({})", ursa_model_name(pid)),
+                ursa_model_name(pid),
                 devinfo.interface_number(),
                 devinfo.usage_page(),
                 devinfo.usage(),
@@ -196,7 +202,8 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
             last_missing_log = Instant::now();
         }
 
-        controller_connected.store(!devices.is_empty(), Ordering::Relaxed);
+        let vibe_ready = devices.iter().any(is_vibe_interface);
+        controller_connected.store(vibe_ready, Ordering::Relaxed);
         last_scan = Instant::now();
     };
 
@@ -211,7 +218,7 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
                         && (i16::from(desired_intensity) - i16::from(last_sent_intensity)).abs()
                             >= 15
                     {
-                        logs.push(format!("HID: cmd SendIntensity({})", desired_intensity));
+                        logs.push(format!("HID: cmd SendIntensity({desired_intensity})"));
                     }
                 }
                 HidCmd::SendRaw(bytes) => {
@@ -219,12 +226,9 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
                     for d in &devices {
                         if let Err(e) = d.dev.write(&bytes) {
                             logs.push(format!(
-                                "HID: raw write FAILED (PID=0x{:04X} {}, if#{}, usage_page=0x{:04X}, usage=0x{:04X}) path='{}': {}",
+                                "HID: raw write FAILED (PID=0x{:04X} {}, path='{}'): {}",
                                 d.pid,
                                 ursa_model_name(d.pid),
-                                d.ifnum,
-                                d.usage_page,
-                                d.usage,
                                 d.path,
                                 e
                             ));
@@ -238,7 +242,7 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
                 }
                 HidCmd::SetHold(x) => {
                     hold = x;
-                    logs.push(format!("HID: cmd SetHold({})", hold));
+                    logs.push(format!("HID: cmd SetHold({hold})"));
                     if hold {
                         let (_ok, _fail) = hid_send_out(&devices, 0, &logs);
                         last_sent_intensity = 0;
@@ -264,17 +268,14 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
                 let (ok, fail) = hid_send_out(&devices, out, &logs);
 
                 let now = Instant::now();
-                if fail > 0
+                if out > 0
+                    || fail > 0
                     || ok == 0
                     || now.duration_since(last_status_log) > Duration::from_millis(900)
                 {
                     logs.push(format!(
-                        "HID: send intensity {} → ok={} fail={} (devs={}, hold={})",
-                        out,
-                        ok,
-                        fail,
+                        "HID: send intensity {out} → ok={ok} fail={fail} (devs={}, hold={hold})",
                         devices.len(),
-                        hold
                     ));
                     last_status_log = now;
                 }
