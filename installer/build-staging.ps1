@@ -1,5 +1,5 @@
 # Local MSI build helper — run from repo root after building release binaries.
-# Requires Advanced Installer (GUI) to open/build installer\ursa-minor-ffb.aip.
+# Requires Advanced Installer project: installer\Ursa Minor FFB.aip
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
@@ -21,9 +21,9 @@ try {
 
     Write-Host ""
     Write-Host "Next steps:"
-    Write-Host "  1. Open installer\ursa-minor-ffb.aip in Advanced Installer"
-    Write-Host "  2. Build -> Build (output: dist\UrsaMinorFFB-<version>.msi)"
-    Write-Host "  3. Test: msiexec /i `"dist\UrsaMinorFFB-2.0.1-x64.msi`" /passive"
+    Write-Host "  1. Open installer\Ursa Minor FFB.aip in Advanced Installer"
+    Write-Host "  2. Build -> Build (local output: dist\msi-build\)"
+    Write-Host "  3. Test: msiexec /i `"dist\msi-build\<your-msi-name>.msi`" /passive"
     Write-Host "  4. Verify: dir `"C:\Program Files\Ursa Minor FFB`""
 }
 finally {

@@ -1,3 +1,5 @@
 *.msi
+*-cache/
 _ref.aip
 _ref2.aip
+ursa-minor-ffb.aip

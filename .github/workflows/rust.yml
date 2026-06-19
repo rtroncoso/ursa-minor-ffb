@@ -91,10 +91,10 @@ jobs:
       - name: Build MSI
         uses: caphyon/advinst-github-action@main
         with:
-          advinst-version: "22.0"
+          advinst-version: "23.7"
           advinst-license: ${{ secrets.ADVINST_LICENSE_KEY }}
           advinst-enable-automation: "true"
-          aip-path: ${{ github.workspace }}\installer\ursa-minor-ffb.aip
+          aip-path: "${{ github.workspace }}\\installer\\Ursa Minor FFB.aip"
           aip-build-name: DefaultBuild
           aip-package-name: UrsaMinorFFB-${{ github.ref_name }}-x64.msi
           aip-output-dir: ${{ github.workspace }}\dist

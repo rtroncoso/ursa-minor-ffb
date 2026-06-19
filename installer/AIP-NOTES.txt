@@ -1,0 +1,11 @@
+# Advanced Installer project: installer\Ursa Minor FFB.aip
+#
+# Local build output (Builds tab): dist\msi-build\
+# CI overrides output to dist\UrsaMinorFFB-<tag>-x64.msi via GitHub Actions.
+#
+# Before building locally:
+#   .\installer\build-staging.ps1
+#
+# CLI (optional):
+#   AdvancedInstaller.com /edit "installer\Ursa Minor FFB.aip" /SetVersion 2.0.1
+#   AdvancedInstaller.com /build "installer\Ursa Minor FFB.aip"

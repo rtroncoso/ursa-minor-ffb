@@ -1,67 +1,67 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<DOCUMENT Type="Advanced Installer" CreateVersion="22.0" version="22.0" Modules="simple" RootPath="." Language="en" Id="{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}">
-  <COMPONENT cid="caphyon.advinst.msicomp.ProjectOptionsComponent">
-    <ROW Name="HiddenItems" Value="AppXProductDetailsComponent;AppXDependenciesComponent;AppXAppDetailsComponent;AppXVisualAssetsComponent;AppXCapabilitiesComponent;AppXAppDeclarationsComponent;AppXUriRulesComponent"/>
-  </COMPONENT>
+<DOCUMENT Type="Advanced Installer" CreateVersion="23.7" version="23.7" Modules="simple" RootPath="." Language="en" Id="{952C2A3A-869F-4F08-BA13-A6DCF594AF18}">
   <COMPONENT cid="caphyon.advinst.msicomp.MsiPropsComponent">
     <ROW Property="AI_BITMAP_DISPLAY_MODE" Value="0"/>
     <ROW Property="ALLUSERS" Value="1"/>
     <ROW Property="ARPCOMMENTS" Value="Ursa Minor FFB force-feedback utility for flight simulation." ValueLocId="*"/>
-    <ROW Property="ARPCONTACT" Value="rt"/>
+    <ROW Property="ARPCONTACT" Value="rod.tronco@gmail.com"/>
     <ROW Property="ARPHELPLINK" Value="https://github.com/rtroncoso/ursa-minor-ffb"/>
-    <ROW Property="ARPPRODUCTICON" Value="appicon.exe" Type="8"/>
-    <ROW Property="ARPURLINFOABOUT" Value="https://github.com/rtroncoso/ursa-minor-ffb"/>
+    <ROW Property="ARPPRODUCTICON" Value="icon.exe" Type="8"/>
+    <ROW Property="ARPURLINFOABOUT" Value="mailto:rod.tronco@gmail.com"/>
     <ROW Property="ARPURLUPDATEINFO" Value="https://github.com/rtroncoso/ursa-minor-ffb/releases"/>
     <ROW Property="Manufacturer" Value="rt"/>
-    <ROW Property="ProductCode" Value="1033:{C4D5E6F7-A8B9-4C0D-9E1F-234567890ABC} " Type="16"/>
+    <ROW Property="ProductCode" Value="1033:{D5C2D3B9-C4F5-4557-B4C1-741DB5D09D88} " Type="16"/>
     <ROW Property="ProductLanguage" Value="1033"/>
     <ROW Property="ProductName" Value="Ursa Minor FFB"/>
-    <ROW Property="ProductVersion" Value="2.0.1" Type="32"/>
+    <ROW Property="ProductVersion" Value="2.0.1" Options="32"/>
     <ROW Property="SecureCustomProperties" Value="OLDPRODUCTS;AI_NEWERPRODUCTFOUND"/>
-    <ROW Property="UpgradeCode" Value="{D5E6F7A8-B9C0-4D1E-8F2A-345678901BCD}"/>
+    <ROW Property="UpgradeCode" Value="{316C59E5-5DC0-4888-8216-382403C2A593}"/>
     <ROW Property="WindowsType9X" MultiBuildValue="DefaultBuild:Windows 9x/ME" ValueLocId="-"/>
     <ROW Property="WindowsType9XDisplay" MultiBuildValue="DefaultBuild:Windows 9x/ME" ValueLocId="-"/>
+    <ROW Property="WindowsTypeNT" MultiBuildValue="DefaultBuild:Windows 9x/ME/NT/2000/XP/Vista/Windows 7/Windows 8 x86/Windows 8.1 x86/Windows 10 x86" ValueLocId="-"/>
     <ROW Property="WindowsTypeNT40" MultiBuildValue="DefaultBuild:Windows NT 4.0" ValueLocId="-"/>
     <ROW Property="WindowsTypeNT40Display" MultiBuildValue="DefaultBuild:Windows NT 4.0" ValueLocId="-"/>
     <ROW Property="WindowsTypeNT50" MultiBuildValue="DefaultBuild:Windows 2000" ValueLocId="-"/>
     <ROW Property="WindowsTypeNT50Display" MultiBuildValue="DefaultBuild:Windows 2000" ValueLocId="-"/>
-    <ROW Property="WindowsTypeNT5X" MultiBuildValue="DefaultBuild:Windows XP/2003 RTM, Windows XP/2003 SP1, Windows XP SP2 x86" ValueLocId="-"/>
-    <ROW Property="WindowsTypeNT5XDisplay" MultiBuildValue="DefaultBuild:Windows XP/2003 RTM, Windows XP/2003 SP1, Windows XP SP2 x86" ValueLocId="-"/>
+    <ROW Property="WindowsTypeNT5X" MultiBuildValue="DefaultBuild:Windows XP/2003" ValueLocId="-"/>
+    <ROW Property="WindowsTypeNT5XDisplay" MultiBuildValue="DefaultBuild:Windows XP/2003" ValueLocId="-"/>
+    <ROW Property="WindowsTypeNT60" MultiBuildValue="DefaultBuild:Windows Vista/Server 2008" ValueLocId="-"/>
+    <ROW Property="WindowsTypeNT60Display" MultiBuildValue="DefaultBuild:Windows Vista/Server 2008" ValueLocId="-"/>
+    <ROW Property="WindowsTypeNT64" MultiBuildValue="DefaultBuild:Windows 7 x64, Windows Server 2008 R2 x64, Windows 8 x64, Windows Server 2012 x64, Windows 8.1 x64, Windows Server 2012 R2 x64, Windows Server x64" ValueLocId="-"/>
+    <ROW Property="WindowsTypeNT64Display" MultiBuildValue="DefaultBuild:Windows 7 x64, Windows Server 2008 R2 x64, Windows 8 x64, Windows Server 2012 x64, Windows 8.1 x64, Windows Server 2012 R2 x64, Windows Server x64" ValueLocId="-"/>
+    <ROW Property="WindowsTypeNTDisplay" MultiBuildValue="DefaultBuild:32-bit Windows versions" ValueLocId="-"/>
   </COMPONENT>
   <COMPONENT cid="caphyon.advinst.msicomp.MsiDirsComponent">
-    <ROW Directory="APPDIR" Directory_Parent="TARGETDIR" DefaultDir="APPDIR:." IsPseudoRoot="1"/>
-    <ROW Directory="ProgramMenuFolder" Directory_Parent="TARGETDIR" DefaultDir="PROGRA~2|ProgramMenuFolder" IsPseudoRoot="1"/>
-    <ROW Directory="ProgramMenuDir" Directory_Parent="ProgramMenuFolder" DefaultDir="URSA~1|Ursa Minor FFB"/>
+    <ROW Directory="APPDIR" Directory_Parent="TARGETDIR" DefaultDir="APPDIR:." IsPseudoRoot="1" DirectoryOptions="3"/>
+    <ROW Directory="ProgramFiles64Folder" Directory_Parent="TARGETDIR" DefaultDir="PROGRA~1|ProgramFiles64Folder" IsPseudoRoot="1"/>
+    <ROW Directory="SHORTCUTDIR" Directory_Parent="TARGETDIR" DefaultDir="SHORTC~1|SHORTCUTDIR" IsPseudoRoot="1"/>
+    <ROW Directory="StartMenuFolder" Directory_Parent="TARGETDIR" DefaultDir="STARTM~1|StartMenuFolder" IsPseudoRoot="1"/>
     <ROW Directory="TARGETDIR" DefaultDir="SourceDir"/>
+    <ROW Directory="UrsaMinorFFB_Dir" Directory_Parent="ProgramFiles64Folder" DefaultDir="URSAMI~2|Ursa Minor FFB"/>
+  </COMPONENT>
+  <COMPONENT cid="caphyon.advinst.msicomp.SideBySideGuidComponent">
+    <ROW Component="APPDIR" Value="{5A44F530-736F-499A-9303-6206A019D8D2}"/>
+    <ROW Component="ProductInformation" Value="{BA7BF3EE-91C0-458F-A754-DCA6A33D35E6}"/>
   </COMPONENT>
   <COMPONENT cid="caphyon.advinst.msicomp.MsiCompsComponent">
-    <ROW Component="ProductInformation" ComponentId="{72E5C433-D45C-45F4-AF47-0DD66CC8E52E}" Directory_="APPDIR" Attributes="4" KeyPath="Version"/>
-    <ROW Component="UrsaMinorFFB.exe" ComponentId="{E1F2A3B4-C5D6-4E7F-8901-234567890ABC}" Directory_="APPDIR" Attributes="256" KeyPath="UrsaMinorFFB.exe"/>
-    <ROW Component="SimConnect.dll" ComponentId="{F2A3B4C5-D6E7-4F89-0123-4567890ABCDE}" Directory_="APPDIR" Attributes="256" KeyPath="SimConnect.dll"/>
-    <ROW Component="ursa_minor_updater.exe" ComponentId="{A3B4C5D6-E7F8-4901-2345-67890ABCDEF0}" Directory_="APPDIR" Attributes="256" KeyPath="ursa_minor_updater.exe"/>
-    <ROW Component="ProgramMenuDir" ComponentId="{B4C5D6E7-F890-4012-3456-7890ABCDEF01}" Directory_="ProgramMenuDir" Attributes="0" KeyPath="ProgramMenuDir"/>
+    <ROW Component="APPDIR" ComponentId="{5A44F530-736F-499A-9303-6206A019D8D2}" Directory_="APPDIR" Attributes="0"/>
+    <ROW Component="ProductInformation" ComponentId="{BA7BF3EE-91C0-458F-A754-DCA6A33D35E6}" Directory_="APPDIR" Attributes="4" KeyPath="Version"/>
+    <ROW Component="SHORTCUTDIR" ComponentId="{8AF54FCC-FED7-497D-875C-E5F99790C775}" Directory_="SHORTCUTDIR" Attributes="0"/>
+    <ROW Component="SimConnect.dll" ComponentId="{C618273B-66E3-4A88-B58B-191D04405EF4}" Directory_="UrsaMinorFFB_Dir" Attributes="256" KeyPath="SimConnect.dll"/>
+    <ROW Component="UrsaMinorFFB.exe" ComponentId="{915A820B-EF9F-4D54-B99C-8DB346A0264D}" Directory_="UrsaMinorFFB_Dir" Attributes="256" KeyPath="UrsaMinorFFB.exe"/>
+    <ROW Component="ursaminorupdater.exe" ComponentId="{0FD89850-03D7-46DD-AC16-91442784FE30}" Directory_="UrsaMinorFFB_Dir" Attributes="256" KeyPath="ursaminorupdater.exe"/>
   </COMPONENT>
   <COMPONENT cid="caphyon.advinst.msicomp.MsiFeatsComponent">
-    <ROW Feature="MainFeature" Title="Ursa Minor FFB" Description="Main application" Display="1" Level="1" Directory_="APPDIR" Attributes="0" Components="ProductInformation UrsaMinorFFB.exe SimConnect.dll ursa_minor_updater.exe ProgramMenuDir"/>
+    <ROW Feature="MainFeature" Title="MainFeature" Description="Description" Display="1" Level="1" Directory_="APPDIR" Attributes="0"/>
     <ATTRIBUTE name="CurrentFeature" value="MainFeature"/>
   </COMPONENT>
   <COMPONENT cid="caphyon.advinst.msicomp.MsiFilesComponent">
-    <ROW File="UrsaMinorFFB.exe" Component_="UrsaMinorFFB.exe" FileName="URSA~1.EXE|Ursa Minor FFB.exe" Attributes="0" SourcePath="..\dist\msi-staging\Ursa Minor FFB.exe" SelfReg="false"/>
-    <ROW File="SimConnect.dll" Component_="SimConnect.dll" FileName="SimConnect.dll" Attributes="0" SourcePath="..\dist\msi-staging\SimConnect.dll" SelfReg="false"/>
-    <ROW File="ursa_minor_updater.exe" Component_="ursa_minor_updater.exe" FileName="ursa-minor-updater.exe" Attributes="0" SourcePath="..\dist\msi-staging\ursa-minor-updater.exe" SelfReg="false"/>
-  </COMPONENT>
-  <COMPONENT cid="caphyon.advinst.msicomp.MsiShortsComponent">
-    <ROW Shortcut="UrsaMinorFFB" Directory_="ProgramMenuDir" Name="URSA~1|Ursa Minor FFB" Component_="UrsaMinorFFB.exe" Target="[#UrsaMinorFFB.exe]" Hotkey="0" Icon_="appicon.exe" IconIndex="0" ShowCmd="1" WkDir="APPDIR"/>
-  </COMPONENT>
-  <COMPONENT cid="caphyon.advinst.msicomp.MsiLockPermComponent">
-    <ROW LockObject="APPDIR" Table="CreateFolder" User="[GRP_USERS]" Permission="1179817" Flags="0"/>
-    <ROW LockObject="APPDIR" Table="CreateFolder" User="[GRP_ADMINISTRATORS]" Permission="1245631" Flags="0"/>
-  </COMPONENT>
-  <COMPONENT cid="caphyon.advinst.msicomp.BootstrOptComponent">
-    <ROW BootstrOptKey="GlobalOptions" DownloadFolder="[AppDataFolder][|Manufacturer]\[|ProductName]\prerequisites" Options="2"/>
+    <ROW File="SimConnect.dll" Component_="SimConnect.dll" FileName="SIMCON~1.DLL|SimConnect.dll" Attributes="0" SourcePath="..\dist\msi-staging\SimConnect.dll" SelfReg="false"/>
+    <ROW File="UrsaMinorFFB.exe" Component_="UrsaMinorFFB.exe" FileName="URSAMI~1.EXE|Ursa Minor FFB.exe" Attributes="0" SourcePath="..\dist\msi-staging\Ursa Minor FFB.exe" SelfReg="false" DigSign="true"/>
+    <ROW File="ursaminorupdater.exe" Component_="ursaminorupdater.exe" FileName="URSA-M~1.EXE|ursa-minor-updater.exe" Attributes="0" SourcePath="..\dist\msi-staging\ursa-minor-updater.exe" SelfReg="false" DigSign="true"/>
   </COMPONENT>
   <COMPONENT cid="caphyon.advinst.msicomp.BuildComponent">
-    <ROW BuildKey="DefaultBuild" BuildName="DefaultBuild" BuildOrder="1" BuildType="0" PackageFolder=".." PackageFileName="UrsaMinorFFB" Languages="en" InstallationType="4" UseLargeSchema="true"/>
+    <ROW BuildKey="DefaultBuild" BuildName="DefaultBuild" BuildOrder="1" BuildType="0" PackageFolder="." PackageFileName="[|AI_AIP_FILENAME]" Languages="en" InstallationType="4" UseLargeSchema="true"/>
   </COMPONENT>
   <COMPONENT cid="caphyon.advinst.msicomp.DictionaryComponent">
     <ROW Path="&lt;AI_DICTS&gt;ui.ail"/>
@@ -75,6 +75,7 @@
     <ROW Fragment="SequenceDialogs.aip" Path="&lt;AI_THEMES&gt;classic\fragments\SequenceDialogs.aip"/>
     <ROW Fragment="Sequences.aip" Path="&lt;AI_FRAGS&gt;Sequences.aip"/>
     <ROW Fragment="StaticUIStrings.aip" Path="&lt;AI_FRAGS&gt;StaticUIStrings.aip"/>
+    <ROW Fragment="Themes.aip" Path="&lt;AI_FRAGS&gt;Themes.aip"/>
     <ROW Fragment="UI.aip" Path="&lt;AI_THEMES&gt;classic\fragments\UI.aip"/>
     <ROW Fragment="Validation.aip" Path="&lt;AI_FRAGS&gt;Validation.aip"/>
     <ROW Fragment="VerifyRemoveDlg.aip" Path="&lt;AI_THEMES&gt;classic\fragments\VerifyRemoveDlg.aip"/>
@@ -108,22 +109,35 @@
     <ROW Dialog_="VerifyReadyDlg" Control_="Install" Event="EndDialog" Argument="Return" Condition="AI_PATCH" Ordering="199"/>
     <ROW Dialog_="VerifyReadyDlg" Control_="Back" Event="NewDialog" Argument="PatchWelcomeDlg" Condition="AI_PATCH" Ordering="203"/>
   </COMPONENT>
+  <COMPONENT cid="caphyon.advinst.msicomp.MsiCreateFolderComponent">
+    <ROW Directory_="APPDIR" Component_="APPDIR" ManualDelete="true"/>
+    <ROW Directory_="SHORTCUTDIR" Component_="SHORTCUTDIR" ManualDelete="false"/>
+  </COMPONENT>
   <COMPONENT cid="caphyon.advinst.msicomp.MsiCustActComponent">
     <ROW Action="AI_DOWNGRADE" Type="19" Target="4010"/>
     <ROW Action="AI_DpiContentScale" Type="1" Source="aicustact.dll" Target="DpiContentScale"/>
     <ROW Action="AI_EnableDebugLog" Type="321" Source="aicustact.dll" Target="EnableDebugLog"/>
     <ROW Action="AI_InstallModeCheck" Type="1" Source="aicustact.dll" Target="UpdateInstallMode" WithoutSeq="true"/>
     <ROW Action="AI_PREPARE_UPGRADE" Type="65" Source="aicustact.dll" Target="PrepareUpgrade"/>
+    <ROW Action="AI_PRESERVE_INSTALL_TYPE" Type="65" Source="aicustact.dll" Target="PreserveInstallType"/>
     <ROW Action="AI_RESTORE_LOCATION" Type="65" Source="aicustact.dll" Target="RestoreLocation"/>
     <ROW Action="AI_ResolveKnownFolders" Type="1" Source="aicustact.dll" Target="AI_ResolveKnownFolders"/>
     <ROW Action="AI_SHOW_LOG" Type="65" Source="aicustact.dll" Target="LaunchLogFile" WithoutSeq="true"/>
     <ROW Action="AI_STORE_LOCATION" Type="51" Source="ARPINSTALLLOCATION" Target="[APPDIR]"/>
-    <ROW Action="SET_APPDIR" Type="307" Source="APPDIR" Target="[ProgramFiles64Folder]Ursa Minor FFB"/>
-    <ROW Action="SET_SHORTCUTDIR" Type="307" Source="SHORTCUTDIR" Target="[ProgramMenuFolder]Ursa Minor FFB"/>
+    <ROW Action="SET_APPDIR" Type="307" Source="APPDIR" Target="[ProgramFilesFolder][ProductName]"/>
+    <ROW Action="SET_SHORTCUTDIR" Type="307" Source="SHORTCUTDIR" Target="[ProgramMenuFolder][ProductName]"/>
     <ROW Action="SET_TARGETDIR_TO_APPDIR" Type="51" Source="TARGETDIR" Target="[APPDIR]"/>
   </COMPONENT>
+  <COMPONENT cid="caphyon.advinst.msicomp.MsiFeatCompsComponent">
+    <ROW Feature_="MainFeature" Component_="APPDIR"/>
+    <ROW Feature_="MainFeature" Component_="ProductInformation"/>
+    <ROW Feature_="MainFeature" Component_="SimConnect.dll"/>
+    <ROW Feature_="MainFeature" Component_="UrsaMinorFFB.exe"/>
+    <ROW Feature_="MainFeature" Component_="ursaminorupdater.exe"/>
+    <ROW Feature_="MainFeature" Component_="SHORTCUTDIR"/>
+  </COMPONENT>
   <COMPONENT cid="caphyon.advinst.msicomp.MsiIconsComponent">
-    <ROW Name="appicon.exe" SourcePath="..\assets\icon.ico" Index="0"/>
+    <ROW Name="icon.exe" SourcePath="..\assets\icon.ico" Index="0"/>
   </COMPONENT>
   <COMPONENT cid="caphyon.advinst.msicomp.MsiInstExSeqComponent">
     <ROW Action="AI_DOWNGRADE" Condition="AI_NEWERPRODUCTFOUND AND (UILevel &lt;&gt; 5)" Sequence="210"/>
@@ -134,23 +148,37 @@
     <ROW Action="AI_EnableDebugLog" Sequence="51"/>
   </COMPONENT>
   <COMPONENT cid="caphyon.advinst.msicomp.MsiInstallUISequenceComponent">
+    <ROW Action="AI_PRESERVE_INSTALL_TYPE" Sequence="199"/>
     <ROW Action="AI_RESTORE_LOCATION" Condition="APPDIR=&quot;&quot;" Sequence="749"/>
     <ROW Action="AI_ResolveKnownFolders" Sequence="53"/>
     <ROW Action="AI_DpiContentScale" Sequence="52"/>
     <ROW Action="AI_EnableDebugLog" Sequence="51"/>
   </COMPONENT>
   <COMPONENT cid="caphyon.advinst.msicomp.MsiLaunchConditionsComponent">
-    <ROW Condition="VersionNT" Description="[ProductName] requires Windows NT." DescriptionLocId="AI.LaunchCondition.No9X" IsPredefined="true" Builds="DefaultBuild"/>
+    <ROW Condition="( Version9X OR ( NOT VersionNT64 ) OR ( VersionNT64 AND ((VersionNT64 &lt;&gt; 601) OR (MsiNTProductType &lt;&gt; 1)) AND ((VersionNT64 &lt;&gt; 601) OR (MsiNTProductType = 1)) AND ((VersionNT64 &lt;&gt; 602) OR (MsiNTProductType &lt;&gt; 1)) AND ((VersionNT64 &lt;&gt; 602) OR (MsiNTProductType = 1)) AND ((VersionNT64 &lt;&gt; 603) OR (MsiNTProductType &lt;&gt; 1)) AND ((VersionNT64 &lt;&gt; 603) OR (MsiNTProductType = 1)) AND ((VersionNT64 &lt;&gt; 1000 AND VersionNT64 &lt;&gt; 1100) OR (MsiNTProductType = 1)) ) )" Description="[ProductName] cannot be installed on the following Windows versions: [WindowsTypeNT64Display]." DescriptionLocId="AI.LaunchCondition.NoSpecificNT64" IsPredefined="true" Builds="DefaultBuild"/>
+    <ROW Condition="( Version9X OR VersionNT64 )" Description="[ProductName] cannot be installed on [WindowsTypeNTDisplay]." DescriptionLocId="AI.LaunchCondition.NoNT" IsPredefined="true" Builds="DefaultBuild"/>
+    <ROW Condition="((VersionNT &lt;&gt; 501) AND (VersionNT &lt;&gt; 502))" Description="[ProductName] cannot be installed on [WindowsTypeNT5XDisplay]." DescriptionLocId="AI.LaunchCondition.NoNT5X" IsPredefined="true" Builds="DefaultBuild"/>
+    <ROW Condition="(VersionNT &lt;&gt; 400)" Description="[ProductName] cannot be installed on [WindowsTypeNT40Display]." DescriptionLocId="AI.LaunchCondition.NoNT40" IsPredefined="true" Builds="DefaultBuild"/>
+    <ROW Condition="(VersionNT &lt;&gt; 500)" Description="[ProductName] cannot be installed on [WindowsTypeNT50Display]." DescriptionLocId="AI.LaunchCondition.NoNT50" IsPredefined="true" Builds="DefaultBuild"/>
+    <ROW Condition="(VersionNT &lt;&gt; 600)" Description="[ProductName] cannot be installed on [WindowsTypeNT60Display]." DescriptionLocId="AI.LaunchCondition.NoNT60" IsPredefined="true" Builds="DefaultBuild"/>
+    <ROW Condition="VersionNT" Description="[ProductName] cannot be installed on [WindowsType9XDisplay]." DescriptionLocId="AI.LaunchCondition.No9X" IsPredefined="true" Builds="DefaultBuild"/>
   </COMPONENT>
   <COMPONENT cid="caphyon.advinst.msicomp.MsiRegsComponent">
+    <ROW Registry="Manufacturer" Root="-1" Key="Software\[Manufacturer]" Name="\"/>
     <ROW Registry="Path" Root="-1" Key="Software\[Manufacturer]\[ProductName]" Name="Path" Value="[APPDIR]" Component_="ProductInformation"/>
+    <ROW Registry="ProductName" Root="-1" Key="Software\[Manufacturer]\[ProductName]" Name="\"/>
+    <ROW Registry="Software" Root="-1" Key="Software" Name="\"/>
     <ROW Registry="Version" Root="-1" Key="Software\[Manufacturer]\[ProductName]" Name="Version" Value="[ProductVersion]" Component_="ProductInformation"/>
+  </COMPONENT>
+  <COMPONENT cid="caphyon.advinst.msicomp.MsiShortsComponent">
+    <ROW Shortcut="UrsaMinorFFB" Directory_="SHORTCUTDIR" Name="URSAMI~1|Ursa Minor FFB" Component_="UrsaMinorFFB.exe" Target="[#UrsaMinorFFB.exe]" Description="Ursa Minor FFB" Hotkey="0" Icon_="icon.exe" IconIndex="0" ShowCmd="1" WkDir="UrsaMinorFFB_Dir"/>
+    <ROW Shortcut="UrsaMinorFFB_1" Directory_="StartMenuFolder" Name="URSAMI~1|Ursa Minor FFB" Component_="UrsaMinorFFB.exe" Target="[#UrsaMinorFFB.exe]" Description="Ursa Minor FFB" Hotkey="0" Icon_="icon.exe" IconIndex="0" ShowCmd="1" WkDir="UrsaMinorFFB_Dir"/>
   </COMPONENT>
   <COMPONENT cid="caphyon.advinst.msicomp.MsiThemeComponent">
     <ATTRIBUTE name="UsedTheme" value="classic"/>
   </COMPONENT>
   <COMPONENT cid="caphyon.advinst.msicomp.MsiUpgradeComponent">
-    <ROW UpgradeCode="[|UpgradeCode]" VersionMin="0.0.1" VersionMax="[|ProductVersion]" Attributes="769" ActionProperty="OLDPRODUCTS"/>
+    <ROW UpgradeCode="[|UpgradeCode]" VersionMin="0.0.1" VersionMax="[|ProductVersion]" Attributes="257" ActionProperty="OLDPRODUCTS"/>
     <ROW UpgradeCode="[|UpgradeCode]" VersionMin="[|ProductVersion]" Attributes="2" ActionProperty="AI_NEWERPRODUCTFOUND"/>
   </COMPONENT>
 </DOCUMENT>
