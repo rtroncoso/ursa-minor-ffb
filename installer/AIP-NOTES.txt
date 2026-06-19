@@ -6,6 +6,9 @@
 # Before building locally:
 #   .\installer\build-staging.ps1
 #
+# Before tagging a release:
+#   .\scripts\bump-version.ps1 patch   # or minor | major | X.Y.Z
+#
 # CLI (optional):
 #   AdvancedInstaller.com /edit "installer\Ursa Minor FFB.aip" /SetVersion 2.0.1
 #   AdvancedInstaller.com /build "installer\Ursa Minor FFB.aip"
