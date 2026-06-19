@@ -143,6 +143,7 @@ pub enum HidCmd {
     StopAll,
     ReopenDevices,
     SetHold(bool),
+    SetSidestickVariant(crate::hid::protocol::SidestickVariant),
 }
 
 #[derive(Default)]

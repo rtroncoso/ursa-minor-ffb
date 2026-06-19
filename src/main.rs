@@ -5,7 +5,7 @@ use ursa_minor_ffb::{
     log::LogBuffer,
     preset::{PresetShared, PresetStore},
     sim::sim_worker,
-    ui::{Tab, UiState},
+    ui::{UiState},
     EffectsShared, EffectsState, FlightVars, HidCmd, UiCmd,
 };
 
@@ -64,6 +64,8 @@ fn main() -> Result<()> {
         thread::spawn(move || hid_worker(controller_flag, rx, logs));
     }
 
+    let _ = tx_hid.send(HidCmd::SetSidestickVariant(app_settings.sidestick_variant));
+
     {
         let last_vars_c = last_vars.clone();
         let tx_hid_c = tx_hid.clone();
@@ -110,26 +112,13 @@ fn main() -> Result<()> {
         show_reset_confirm: false,
         update_prompt: None,
         show_live_aircraft_data: app_settings.show_live_aircraft_data,
+        sidestick_variant: app_settings.sidestick_variant,
         effects,
-
-        #[cfg(debug_assertions)]
-        test_level: 0x80,
-        #[cfg(debug_assertions)]
-        raw_hex: "02 07 BF 00 00 03 49 00 19 00 00 00 00 00".to_string(),
 
         tx_hid: tx_hid.clone(),
         logs: logs.clone(),
         last_vars,
 
-        autoscroll: true,
-        last_log_count: 0,
-
-        #[cfg(debug_assertions)]
-        show_hid_out: true,
-        #[cfg(debug_assertions)]
-        show_hid_opened: true,
-
-        active_tab: Tab::Main,
         hold,
 
         rx_ui,

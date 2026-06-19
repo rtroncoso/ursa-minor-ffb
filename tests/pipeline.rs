@@ -1,4 +1,4 @@
-use ursa_minor_ffb::hid::protocol::{build_simapp_vibe_frame, WW_PID_URSA_MINOR_AIRBUS_L};
+use ursa_minor_ffb::hid::protocol::{build_simapp_vibe_frame, SidestickVariant, WW_PID_URSA_MINOR_AIRBUS_L};
 use ursa_minor_ffb::rumble::RumbleEngine;
 use ursa_minor_ffb::sim::parse::{flight_status, merge_extras, parse_main_elems};
 use ursa_minor_ffb::{FlightVars, PresetKind, PresetShared, RumbleConfig, SimStatus, SimVarLayout};
@@ -48,8 +48,13 @@ fn pipeline_ground_taxi_to_takeoff() {
     assert!(taxi_out.effects.ground_thump_active);
     assert!(taxi_out.intensity > 0);
 
-    let taxi_frame =
-        build_simapp_vibe_frame(WW_PID_URSA_MINOR_AIRBUS_L, 0x02, 14, taxi_out.intensity);
+    let taxi_frame = build_simapp_vibe_frame(
+        SidestickVariant::Airbus,
+        WW_PID_URSA_MINOR_AIRBUS_L,
+        0x02,
+        14,
+        taxi_out.intensity,
+    );
     assert_eq!(taxi_frame[0], 0x02);
     assert_eq!(taxi_frame[8], taxi_out.intensity);
 
@@ -82,7 +87,13 @@ fn pipeline_flap_change_during_flight() {
     let out = engine.step(&flaps_fv, &cfg, 1, false);
 
     assert!(out.effects.flaps_bump_active);
-    let frame = build_simapp_vibe_frame(WW_PID_URSA_MINOR_AIRBUS_L, 0x02, 14, out.intensity);
+    let frame = build_simapp_vibe_frame(
+        SidestickVariant::Airbus,
+        WW_PID_URSA_MINOR_AIRBUS_L,
+        0x02,
+        14,
+        out.intensity,
+    );
     assert_eq!(frame[2], 0xBF);
     assert_eq!(frame[8], out.intensity);
 }
@@ -182,7 +193,13 @@ fn pipeline_frame_encoding_matches_intensity_at_each_step() {
             merge_extras(&mut fv, &extras);
         }
         let out = engine.step(&fv, &cfg, 1, false);
-        let frame = build_simapp_vibe_frame(WW_PID_URSA_MINOR_AIRBUS_L, 0x02, 14, out.intensity);
+        let frame = build_simapp_vibe_frame(
+            SidestickVariant::Airbus,
+            WW_PID_URSA_MINOR_AIRBUS_L,
+            0x02,
+            14,
+            out.intensity,
+        );
         assert_eq!(frame[8], out.intensity);
     }
 }

@@ -17,4 +17,5 @@ pub use preset::{
     AppSettings, LayoutField, Preset, PresetKind, PresetShared, PresetStore, SimVarLayout,
     SimVarProfile,
 };
+pub use hid::protocol::SidestickVariant;
 pub use types::*;

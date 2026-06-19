@@ -1,5 +1,4 @@
 use egui::{Color32, RichText, Vec2};
-use egui_extras::{Column, TableBuilder};
 
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use parking_lot::Mutex;
@@ -16,23 +15,17 @@ use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use crate::{
     preset::{Preset, PresetKind, PresetShared, PresetStore},
-    tray, updater, EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus, UiCmd,
+    tray, updater, EffectsShared, FlightVars, HidCmd, LogBuffer, SidestickVariant, SimStatus,
+    UiCmd,
 };
-
-#[derive(PartialEq, Eq, Clone, Copy)]
-pub enum Tab {
-    Main,
-    #[cfg(debug_assertions)]
-    Debug,
-}
 
 const TOAST_DURATION: Duration = Duration::from_secs(3);
 const TOAST_BOTTOM_MARGIN: f32 = 16.0;
 const SQUARE_BUTTON_ROUNDING: f32 = 4.0;
 
-pub const WINDOW_WIDTH: f32 = 500.0;
-pub const WINDOW_HEIGHT_EXPANDED: f32 = 600.0;
-pub const LIVE_DATA_EXTRA_HEIGHT: f32 = 180.0;
+pub const WINDOW_WIDTH: f32 = 520.0;
+pub const WINDOW_HEIGHT_EXPANDED: f32 = 700.0;
+pub const LIVE_DATA_EXTRA_HEIGHT: f32 = 300.0;
 pub const WINDOW_HEIGHT_COLLAPSED: f32 = WINDOW_HEIGHT_EXPANDED - LIVE_DATA_EXTRA_HEIGHT;
 
 #[derive(Clone, Copy)]
@@ -142,26 +135,13 @@ pub struct UiState {
     pub show_reset_confirm: bool,
     pub update_prompt: Option<updater::ReleaseInfo>,
     pub show_live_aircraft_data: bool,
+    pub sidestick_variant: SidestickVariant,
     pub effects: EffectsShared,
-
-    #[cfg(debug_assertions)]
-    pub test_level: u8,
-    #[cfg(debug_assertions)]
-    pub raw_hex: String,
 
     pub tx_hid: Sender<HidCmd>,
     pub logs: LogBuffer,
     pub last_vars: Arc<Mutex<Option<FlightVars>>>,
 
-    pub autoscroll: bool,
-    pub last_log_count: usize,
-
-    #[cfg(debug_assertions)]
-    pub show_hid_out: bool,
-    #[cfg(debug_assertions)]
-    pub show_hid_opened: bool,
-
-    pub active_tab: Tab,
     pub hold: Arc<AtomicBool>,
 
     pub rx_ui: Receiver<UiCmd>,
@@ -265,6 +245,17 @@ impl UiState {
         self.saved_baseline = preset;
         self.toast = None;
         let _ = self.preset_store.save_active(kind);
+    }
+
+    fn select_sidestick_variant(&mut self, variant: SidestickVariant) {
+        if self.sidestick_variant == variant {
+            return;
+        }
+        self.sidestick_variant = variant;
+        let mut settings = self.preset_store.load_settings();
+        settings.sidestick_variant = variant;
+        let _ = self.preset_store.save_settings(&settings);
+        let _ = self.tx_hid.send(HidCmd::SetSidestickVariant(variant));
     }
 
     fn save_current_preset(&mut self) {
@@ -444,17 +435,36 @@ impl eframe::App for UiState {
                 let controller_ok = self.controller_connected.load(Ordering::Relaxed);
                 controller_badge_dot(ui, controller_ok);
 
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.with_layout(
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.label(RichText::new("Sidestick").strong());
+                            let current_variant = self.sidestick_variant;
+                            egui::ComboBox::from_id_source("sidestick_variant")
+                                .selected_text(current_variant.label())
+                                .show_ui(ui, |ui| {
+                                    for variant in SidestickVariant::ALL {
+                                        if ui
+                                            .selectable_label(
+                                                current_variant == variant,
+                                                variant.label(),
+                                            )
+                                            .clicked()
+                                        {
+                                            self.select_sidestick_variant(variant);
+                                        }
+                                    }
+                                });
+                        },
+                    );
+                });
+
                 let ac = self.aircraft_title.lock().clone();
                 if !ac.is_empty() {
                     ui.separator();
                     ui.label(RichText::new(ac).italics());
-                }
-
-                #[cfg(debug_assertions)]
-                {
-                    ui.separator();
-                    ui.selectable_value(&mut self.active_tab, Tab::Main, "Main");
-                    ui.selectable_value(&mut self.active_tab, Tab::Debug, "Debug");
                 }
 
                 ui.separator();
@@ -476,14 +486,7 @@ impl eframe::App for UiState {
 
         self.dismiss_expired_toast();
 
-        let show_main = true;
-        #[cfg(debug_assertions)]
-        let show_debug = self.active_tab == Tab::Debug;
-        #[cfg(not(debug_assertions))]
-        let show_debug = false;
-        let _ = show_debug;
-
-        if show_main {
+        {
             let mut panel_frame = egui::Frame::central_panel(&ctx.style());
             panel_frame.inner_margin = egui::Margin {
                 left: 12.0,
@@ -800,48 +803,6 @@ impl eframe::App for UiState {
         if let Some(toast) = &self.toast {
             let remaining = toast.expires.saturating_duration_since(Instant::now());
             ctx.request_repaint_after(remaining.min(Duration::from_millis(50)));
-        }
-
-        #[cfg(debug_assertions)]
-        if show_debug {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.heading("Logs");
-                    ui.separator();
-                    ui.checkbox(&mut self.autoscroll, "Auto-scroll");
-                });
-                ui.separator();
-
-                let logs_all = self.logs.snapshot();
-                let logs: Vec<&str> = logs_all.iter().map(|s| s.as_str()).collect();
-
-                let row_height = 16.0;
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .stick_to_bottom(false)
-                    .show(ui, |ui| {
-                        TableBuilder::new(ui)
-                            .striped(true)
-                            .cell_layout(egui::Layout::left_to_right(egui::Align::Min))
-                            .column(Column::remainder())
-                            .body(|body| {
-                                body.rows(row_height, logs.len(), |mut row| {
-                                    let i = row.index();
-                                    row.col(|ui| {
-                                        ui.label(RichText::new(logs[i]).color(Color32::LIGHT_GRAY));
-                                    });
-                                });
-                            });
-
-                        if self.autoscroll && logs.len() > self.last_log_count {
-                            let _ = ui.label("");
-                            ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
-                        }
-                        self.last_log_count = logs.len();
-                    });
-
-                ctx.request_repaint_after(Duration::from_millis(60));
-            });
         }
 
         loop {

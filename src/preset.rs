@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+use crate::hid::protocol::SidestickVariant;
 use crate::RumbleConfig;
 
 mod simvars;
@@ -312,6 +313,8 @@ pub struct AppSettings {
     pub active: PresetKind,
     #[serde(default = "default_show_live_aircraft_data")]
     pub show_live_aircraft_data: bool,
+    #[serde(default)]
+    pub sidestick_variant: SidestickVariant,
 }
 
 fn default_show_live_aircraft_data() -> bool {
@@ -323,6 +326,7 @@ impl Default for AppSettings {
         Self {
             active: PresetKind::Commercial,
             show_live_aircraft_data: true,
+            sidestick_variant: SidestickVariant::Airbus,
         }
     }
 }
@@ -332,6 +336,8 @@ struct SettingsFile {
     active: String,
     #[serde(default = "default_show_live_aircraft_data")]
     show_live_aircraft_data: bool,
+    #[serde(default)]
+    sidestick_variant: String,
 }
 
 pub struct PresetStore {
@@ -425,6 +431,9 @@ impl PresetStore {
                     return AppSettings {
                         active: PresetKind::from_settings_str(&settings.active),
                         show_live_aircraft_data: settings.show_live_aircraft_data,
+                        sidestick_variant: SidestickVariant::from_settings_str(
+                            &settings.sidestick_variant,
+                        ),
                     };
                 }
             }
@@ -673,6 +682,32 @@ mod tests {
         let after_preset_change = store.load_settings();
         assert_eq!(after_preset_change.active, PresetKind::Fighter);
         assert!(!after_preset_change.show_live_aircraft_data);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn settings_roundtrip_preserves_sidestick_variant() {
+        let dir =
+            std::env::temp_dir().join(format!("ursa-settings-variant-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let store = PresetStore::new(dir.clone());
+        store.bootstrap().unwrap();
+
+        let mut settings = store.load_settings();
+        settings.sidestick_variant = SidestickVariant::Fighter;
+        store.save_settings(&settings).unwrap();
+
+        let loaded = store.load_settings();
+        assert_eq!(loaded.sidestick_variant, SidestickVariant::Fighter);
+
+        store.save_active(PresetKind::GeneralAviation).unwrap();
+        let after_preset_change = store.load_settings();
+        assert_eq!(after_preset_change.active, PresetKind::GeneralAviation);
+        assert_eq!(
+            after_preset_change.sidestick_variant,
+            SidestickVariant::Fighter
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

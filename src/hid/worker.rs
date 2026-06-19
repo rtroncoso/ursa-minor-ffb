@@ -8,7 +8,10 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::Receiver;
 use hidapi::{HidApi, HidDevice};
 
-use crate::hid::protocol::{build_simapp_vibe_frame, ursa_model_name, WW_VID};
+use crate::hid::protocol::{
+    build_simapp_vibe_frame, channel_byte_for, handed_label, ursa_model_label, SidestickVariant,
+    WW_VID,
+};
 use crate::hid::win32::hid_query_caps_from_path;
 use crate::{HidCmd, LogBuffer};
 
@@ -27,7 +30,12 @@ fn is_vibe_interface(d: &HidEntry) -> bool {
     d.usage_page == 0x0001 && d.usage == 0x0004
 }
 
-fn hid_send_out(devs: &[HidEntry], intensity: u8, logs: &LogBuffer) -> (usize, usize) {
+fn hid_send_out(
+    devs: &[HidEntry],
+    variant: SidestickVariant,
+    intensity: u8,
+    logs: &LogBuffer,
+) -> (usize, usize) {
     let mut ok = 0usize;
     let mut fail = 0usize;
 
@@ -36,7 +44,7 @@ fn hid_send_out(devs: &[HidEntry], intensity: u8, logs: &LogBuffer) -> (usize, u
             continue;
         }
 
-        let frame = build_simapp_vibe_frame(d.pid, d.report_id, d.out_len, intensity);
+        let frame = build_simapp_vibe_frame(variant, d.pid, d.report_id, d.out_len, intensity);
         match d.dev.write(&frame) {
             Ok(n) => {
                 if n == frame.len() {
@@ -50,7 +58,7 @@ fn hid_send_out(devs: &[HidEntry], intensity: u8, logs: &LogBuffer) -> (usize, u
                 logs.push(format!(
                     "HID: vibe write FAILED (PID=0x{:04X} {}, path='{}'): {}",
                     d.pid,
-                    ursa_model_name(d.pid),
+                    ursa_model_label(variant, d.pid),
                     d.path,
                     e
                 ));
@@ -59,6 +67,30 @@ fn hid_send_out(devs: &[HidEntry], intensity: u8, logs: &LogBuffer) -> (usize, u
     }
 
     (ok, fail)
+}
+
+fn log_vibe_ready_summary(devs: &[HidEntry], variant: SidestickVariant, logs: &LogBuffer) {
+    let vibe_devs: Vec<_> = devs.iter().filter(|d| is_vibe_interface(d)).collect();
+    if vibe_devs.is_empty() {
+        return;
+    }
+
+    let summary: Vec<String> = vibe_devs
+        .iter()
+        .map(|d| {
+            format!(
+                "PID=0x{:04X} hand={} channel=0x{:02X}",
+                d.pid,
+                handed_label(d.pid),
+                channel_byte_for(variant, d.pid)
+            )
+        })
+        .collect();
+
+    logs.push(format!(
+        "HID: sidestick vibe ready ({})",
+        summary.join(", ")
+    ));
 }
 
 pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, logs: LogBuffer) {
@@ -87,9 +119,14 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
     let mut last_sent_intensity: u8 = 255;
     let mut last_send = Instant::now() - SEND_INTERVAL;
     let mut hold: bool = false;
+    let mut current_variant = SidestickVariant::Airbus;
     let mut prev_scan_sig = String::new();
+    let mut prev_vibe_ready = false;
 
-    let mut ensure_open = |api: &mut HidApi, devices: &mut Vec<HidEntry>| {
+    let mut ensure_open = |api: &mut HidApi,
+                           devices: &mut Vec<HidEntry>,
+                           current_variant: SidestickVariant,
+                           prev_vibe_ready: &mut bool| {
         if last_scan.elapsed() < Duration::from_secs(2) && !devices.is_empty() {
             return;
         }
@@ -120,7 +157,7 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
             seen_paths.insert(path.clone());
             found_summary.push(format!(
                 "pid=0x{pid:04X} ({}) if#{ifnum} up=0x{up:04X} u=0x{u:04X} path='{path}'",
-                ursa_model_name(pid),
+                ursa_model_label(current_variant, pid),
             ));
         }
 
@@ -149,6 +186,7 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
                 continue;
             }
 
+            let vid = devinfo.vendor_id();
             let pid = devinfo.product_id();
             let (out_len, report_id) =
                 hid_query_caps_from_path(&path, &logs).unwrap_or((14u16, 0x02u8));
@@ -161,6 +199,13 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
                 }
             };
 
+            let channel = channel_byte_for(current_variant, pid);
+            logs.push(format!(
+                "HID: sidestick connected (VID=0x{vid:04X}, PID=0x{pid:04X}, hand={}, variant={}, channel=0x{channel:02X}, out_len={out_len}, report_id=0x{report_id:02X}) path='{path}'",
+                handed_label(pid),
+                current_variant.label(),
+            ));
+
             devices.push(HidEntry {
                 dev: d,
                 path: path.clone(),
@@ -171,19 +216,6 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
                 out_len,
                 report_id,
             });
-
-            logs.push(format!(
-                "HID: device OPENED (VID=0x{:04X}, PID=0x{:04X} {}, if#{}, up=0x{:04X}, u=0x{:04X}, out_len={}, report_id=0x{:02X}) path='{}'",
-                devinfo.vendor_id(),
-                pid,
-                ursa_model_name(pid),
-                devinfo.interface_number(),
-                devinfo.usage_page(),
-                devinfo.usage(),
-                out_len,
-                report_id,
-                devinfo.path().to_string_lossy()
-            ));
         }
 
         if !devices.is_empty() {
@@ -203,11 +235,20 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
         }
 
         let vibe_ready = devices.iter().any(is_vibe_interface);
+        if vibe_ready && !*prev_vibe_ready {
+            log_vibe_ready_summary(devices, current_variant, &logs);
+        }
+        *prev_vibe_ready = vibe_ready;
         controller_connected.store(vibe_ready, Ordering::Relaxed);
         last_scan = Instant::now();
     };
 
-    ensure_open(&mut api, &mut devices);
+    ensure_open(
+        &mut api,
+        &mut devices,
+        current_variant,
+        &mut prev_vibe_ready,
+    );
 
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
@@ -228,7 +269,7 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
                             logs.push(format!(
                                 "HID: raw write FAILED (PID=0x{:04X} {}, path='{}'): {}",
                                 d.pid,
-                                ursa_model_name(d.pid),
+                                ursa_model_label(current_variant, d.pid),
                                 d.path,
                                 e
                             ));
@@ -244,13 +285,28 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
                     hold = x;
                     logs.push(format!("HID: cmd SetHold({hold})"));
                     if hold {
-                        let (_ok, _fail) = hid_send_out(&devices, 0, &logs);
+                        let (_ok, _fail) =
+                            hid_send_out(&devices, current_variant, 0, &logs);
                         last_sent_intensity = 0;
                     }
                 }
                 HidCmd::ReopenDevices => {
                     logs.push("HID: cmd ReopenDevices");
-                    ensure_open(&mut api, &mut devices);
+                    ensure_open(
+                        &mut api,
+                        &mut devices,
+                        current_variant,
+                        &mut prev_vibe_ready,
+                    );
+                }
+                HidCmd::SetSidestickVariant(v) => {
+                    current_variant = v;
+                    let (left, right) = v.channel_pair();
+                    logs.push(format!(
+                        "HID: sidestick variant → {} (channel L=0x{left:02X}, R=0x{right:02X})",
+                        v.label()
+                    ));
+                    last_sent_intensity = 255;
                 }
             },
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
@@ -260,12 +316,17 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
             }
         }
 
-        ensure_open(&mut api, &mut devices);
+        ensure_open(
+            &mut api,
+            &mut devices,
+            current_variant,
+            &mut prev_vibe_ready,
+        );
 
         if last_send.elapsed() >= SEND_INTERVAL {
             let out = if hold { 0 } else { desired_intensity };
             if out != last_sent_intensity {
-                let (ok, fail) = hid_send_out(&devices, out, &logs);
+                let (ok, fail) = hid_send_out(&devices, current_variant, out, &logs);
 
                 let now = Instant::now();
                 if out > 0

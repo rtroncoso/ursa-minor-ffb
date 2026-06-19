@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 pub const WW_VID: u16 = 0x4098;
 
 pub const WW_PID_URSA_MINOR_AIRBUS_L: u16 = 0xBC27;
@@ -7,15 +9,53 @@ pub const WW_PID_URSA_MINOR_FIGHTER_R: u16 = 0xBC2A;
 pub const WW_PID_URSA_MINOR_SPACE_L: u16 = 0xBC2B;
 pub const WW_PID_URSA_MINOR_SPACE_R: u16 = 0xBC2C;
 
-pub fn ursa_model_name(pid: u16) -> &'static str {
-    match pid {
-        WW_PID_URSA_MINOR_AIRBUS_L => "URSA MINOR AIRBUS L",
-        WW_PID_URSA_MINOR_AIRBUS_R => "URSA MINOR AIRBUS R",
-        WW_PID_URSA_MINOR_FIGHTER_L => "URSA MINOR FIGHTER L",
-        WW_PID_URSA_MINOR_FIGHTER_R => "URSA MINOR FIGHTER R",
-        WW_PID_URSA_MINOR_SPACE_L => "URSA MINOR SPACE L",
-        WW_PID_URSA_MINOR_SPACE_R => "URSA MINOR SPACE R",
-        _ => "UNKNOWN",
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SidestickVariant {
+    #[default]
+    Airbus,
+    Fighter,
+    Space,
+}
+
+impl SidestickVariant {
+    pub const ALL: [SidestickVariant; 3] = [
+        SidestickVariant::Airbus,
+        SidestickVariant::Fighter,
+        SidestickVariant::Space,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SidestickVariant::Airbus => "Airbus",
+            SidestickVariant::Fighter => "Fighter",
+            SidestickVariant::Space => "Space",
+        }
+    }
+
+    pub fn from_settings_str(s: &str) -> Self {
+        match s {
+            "airbus" => SidestickVariant::Airbus,
+            "fighter" => SidestickVariant::Fighter,
+            "space" => SidestickVariant::Space,
+            _ => SidestickVariant::Airbus,
+        }
+    }
+
+    fn channel_base(self) -> u8 {
+        match self {
+            SidestickVariant::Airbus => 0x07,
+            SidestickVariant::Fighter => 0x09,
+            SidestickVariant::Space => 0x0B,
+        }
+    }
+
+    pub fn channel_for_hand(self, right: bool) -> u8 {
+        self.channel_base() + u8::from(right)
+    }
+
+    pub fn channel_pair(self) -> (u8, u8) {
+        (self.channel_for_hand(false), self.channel_for_hand(true))
     }
 }
 
@@ -33,12 +73,34 @@ pub fn is_ursa_minor_right(pid: u16) -> bool {
     )
 }
 
-pub fn handed_selector_for_pid(pid: u16) -> u8 {
+pub fn handed_label(pid: u16) -> &'static str {
     if is_ursa_minor_right(pid) {
-        0x08
+        "Right"
+    } else if is_ursa_minor_left(pid) {
+        "Left"
     } else {
-        0x07
+        "Unknown"
     }
+}
+
+pub fn channel_byte_for(variant: SidestickVariant, pid: u16) -> u8 {
+    variant.channel_for_hand(is_ursa_minor_right(pid))
+}
+
+pub fn ursa_model_label(variant: SidestickVariant, pid: u16) -> String {
+    let hand = if is_ursa_minor_right(pid) {
+        "R"
+    } else if is_ursa_minor_left(pid) {
+        "L"
+    } else {
+        return format!("UNKNOWN (PID=0x{pid:04X})");
+    };
+
+    format!(
+        "URSA MINOR {} {}",
+        variant.label().to_uppercase(),
+        hand
+    )
 }
 
 /// Minimum HID output report length for the simapp vibe intensity byte (body offset 7 → frame[8]).
@@ -48,11 +110,17 @@ pub fn can_send_vibe(out_len: u16) -> bool {
     out_len >= MIN_VIBE_REPORT_LEN
 }
 
-pub fn build_simapp_vibe_frame(pid: u16, report_id: u8, out_len: u16, intensity: u8) -> Vec<u8> {
-    let handed_selector = handed_selector_for_pid(pid);
+pub fn build_simapp_vibe_frame(
+    variant: SidestickVariant,
+    pid: u16,
+    report_id: u8,
+    out_len: u16,
+    intensity: u8,
+) -> Vec<u8> {
+    let channel = channel_byte_for(variant, pid);
 
     let body: [u8; 13] = [
-        handed_selector,
+        channel,
         0xBF,
         0x00,
         0x00,
@@ -92,7 +160,13 @@ mod tests {
 
     #[test]
     fn airbus_left_frame_matches_golden_bytes() {
-        let frame = build_simapp_vibe_frame(WW_PID_URSA_MINOR_AIRBUS_L, 0x02, 14, 0x19);
+        let frame = build_simapp_vibe_frame(
+            SidestickVariant::Airbus,
+            WW_PID_URSA_MINOR_AIRBUS_L,
+            0x02,
+            14,
+            0x19,
+        );
         assert_eq!(frame.len(), 14);
         assert_eq!(frame[0], 0x02);
         assert_eq!(
@@ -102,67 +176,118 @@ mod tests {
     }
 
     #[test]
-    fn airbus_right_uses_handed_byte_08() {
-        let frame = build_simapp_vibe_frame(WW_PID_URSA_MINOR_AIRBUS_R, 0x02, 14, 0x19);
+    fn airbus_right_uses_channel_byte_08() {
+        let frame = build_simapp_vibe_frame(
+            SidestickVariant::Airbus,
+            WW_PID_URSA_MINOR_AIRBUS_R,
+            0x02,
+            14,
+            0x19,
+        );
         assert_eq!(frame[1], 0x08);
         assert_eq!(frame[8], 0x19);
     }
 
     #[test]
-    fn all_pids_have_correct_handed_selector() {
-        let left_pids = [
-            WW_PID_URSA_MINOR_AIRBUS_L,
-            WW_PID_URSA_MINOR_FIGHTER_L,
-            WW_PID_URSA_MINOR_SPACE_L,
-        ];
-        let right_pids = [
-            WW_PID_URSA_MINOR_AIRBUS_R,
+    fn fighter_right_uses_channel_byte_0a() {
+        let frame = build_simapp_vibe_frame(
+            SidestickVariant::Fighter,
             WW_PID_URSA_MINOR_FIGHTER_R,
-            WW_PID_URSA_MINOR_SPACE_R,
-        ];
-
-        for pid in left_pids {
-            assert_eq!(handed_selector_for_pid(pid), 0x07, "pid=0x{pid:04X}");
-        }
-        for pid in right_pids {
-            assert_eq!(handed_selector_for_pid(pid), 0x08, "pid=0x{pid:04X}");
-        }
+            0x02,
+            14,
+            0x19,
+        );
+        assert_eq!(frame[1], 0x0A);
     }
 
     #[test]
-    fn unknown_pid_defaults_to_left_selector() {
-        assert_eq!(handed_selector_for_pid(0xFFFF), 0x07);
+    fn all_channel_bytes_for_variants() {
+        assert_eq!(
+            channel_byte_for(SidestickVariant::Airbus, WW_PID_URSA_MINOR_FIGHTER_L),
+            0x07
+        );
+        assert_eq!(
+            channel_byte_for(SidestickVariant::Airbus, WW_PID_URSA_MINOR_FIGHTER_R),
+            0x08
+        );
+        assert_eq!(
+            channel_byte_for(SidestickVariant::Fighter, WW_PID_URSA_MINOR_FIGHTER_L),
+            0x09
+        );
+        assert_eq!(
+            channel_byte_for(SidestickVariant::Fighter, WW_PID_URSA_MINOR_FIGHTER_R),
+            0x0A
+        );
+        assert_eq!(
+            channel_byte_for(SidestickVariant::Space, WW_PID_URSA_MINOR_FIGHTER_L),
+            0x0B
+        );
+        assert_eq!(
+            channel_byte_for(SidestickVariant::Space, WW_PID_URSA_MINOR_FIGHTER_R),
+            0x0C
+        );
+    }
+
+    #[test]
+    fn unknown_pid_defaults_to_left_channel() {
+        assert_eq!(channel_byte_for(SidestickVariant::Airbus, 0xFFFF), 0x07);
     }
 
     #[test]
     fn frame_truncates_when_out_len_is_short() {
-        let frame = build_simapp_vibe_frame(WW_PID_URSA_MINOR_AIRBUS_L, 0x02, 4, 0x50);
+        let frame = build_simapp_vibe_frame(
+            SidestickVariant::Airbus,
+            WW_PID_URSA_MINOR_AIRBUS_L,
+            0x02,
+            4,
+            0x50,
+        );
         assert_eq!(frame, vec![0x02, 0x07, 0xBF, 0x00]);
     }
 
     #[test]
     fn zero_out_len_returns_empty_buffer() {
-        assert!(build_simapp_vibe_frame(WW_PID_URSA_MINOR_AIRBUS_L, 0x02, 0, 0x80).is_empty());
+        assert!(build_simapp_vibe_frame(
+            SidestickVariant::Airbus,
+            WW_PID_URSA_MINOR_AIRBUS_L,
+            0x02,
+            0,
+            0x80
+        )
+        .is_empty());
     }
 
     #[test]
     fn intensity_byte_is_at_body_offset_seven() {
         for intensity in [0u8, 1, 127, 255] {
-            let frame = build_simapp_vibe_frame(WW_PID_URSA_MINOR_FIGHTER_L, 0x02, 14, intensity);
+            let frame = build_simapp_vibe_frame(
+                SidestickVariant::Fighter,
+                WW_PID_URSA_MINOR_FIGHTER_L,
+                0x02,
+                14,
+                intensity,
+            );
             assert_eq!(frame[8], intensity);
         }
     }
 
     #[test]
-    fn model_names_for_known_pids() {
+    fn model_labels_for_known_pids() {
         assert_eq!(
-            ursa_model_name(WW_PID_URSA_MINOR_AIRBUS_L),
+            ursa_model_label(SidestickVariant::Airbus, WW_PID_URSA_MINOR_AIRBUS_L),
             "URSA MINOR AIRBUS L"
         );
         assert_eq!(
-            ursa_model_name(WW_PID_URSA_MINOR_SPACE_R),
+            ursa_model_label(SidestickVariant::Space, WW_PID_URSA_MINOR_FIGHTER_R),
             "URSA MINOR SPACE R"
         );
-        assert_eq!(ursa_model_name(0x0000), "UNKNOWN");
+        assert!(ursa_model_label(SidestickVariant::Airbus, 0x0000).contains("UNKNOWN"));
+    }
+
+    #[test]
+    fn variant_channel_pairs() {
+        assert_eq!(SidestickVariant::Airbus.channel_pair(), (0x07, 0x08));
+        assert_eq!(SidestickVariant::Fighter.channel_pair(), (0x09, 0x0A));
+        assert_eq!(SidestickVariant::Space.channel_pair(), (0x0B, 0x0C));
     }
 }
