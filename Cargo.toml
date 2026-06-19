@@ -13,9 +13,15 @@ name = "ursa-minor-ffb"
 path = "src/main.rs"
 required-features = ["app"]
 
+[[bin]]
+name = "ursa-minor-updater"
+path = "src/bin/updater.rs"
+required-features = ["updater"]
+
 [features]
 default = []
-app = []
+app = ["dep:eframe", "dep:egui", "dep:egui_extras", "dep:hidapi", "dep:libloading"]
+updater = ["dep:sha2"]
 
 [dependencies]
 crossbeam-channel = "0.5"
@@ -23,29 +29,25 @@ parking_lot = "0.12"
 chrono = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
-
-[target.'cfg(windows)'.dependencies]
-# GUI
-eframe = { version = "0.27", default-features = true }
-egui = "0.27"
-egui_extras = "0.27"
-
-# HID
-hidapi = "2.6"
-
-# DLL loader for SimConnect
-libloading = "0.8"
-
-# utils
 anyhow = "1.0"
 thiserror = "1.0"
 reqwest = { version = "0.11", features = ["blocking", "json", "rustls-tls"] }
 serde_json = "1.0"
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
-
-# Win32 API
 once_cell = "1.19"
 widestring = "1.0"
+sha2 = { version = "0.10", optional = true }
+libloading = { version = "0.8", optional = true }
+
+# GUI (app only)
+eframe = { version = "0.27", default-features = true, optional = true }
+egui = { version = "0.27", optional = true }
+egui_extras = { version = "0.27", optional = true }
+
+# HID (app only)
+hidapi = { version = "2.6", optional = true }
+
+[target.'cfg(windows)'.dependencies]
 windows = { version = "0.56", features = [
   "Win32_Foundation",
   "Win32_UI_Shell",
@@ -53,8 +55,10 @@ windows = { version = "0.56", features = [
   "Win32_Graphics_Gdi",
   "Win32_Security",
   "Win32_System_LibraryLoader",
+  "Win32_System_Threading",
+  "Win32_System_Diagnostics_ToolHelp",
   "Win32_Storage_FileSystem",
-  "Win32_Devices_HumanInterfaceDevice"
+  "Win32_Devices_HumanInterfaceDevice",
 ] }
 
 [target.'cfg(windows)'.build-dependencies]

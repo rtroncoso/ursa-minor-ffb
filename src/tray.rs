@@ -26,10 +26,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP, WM_USER, WNDCLASSW, WS_OVERLAPPED,
 };
 
-use crate::{updater, UiCmd};
+use crate::UiCmd;
 
 const ID_TRAY_STOP_OR_RESUME: u32 = 1002;
-const ID_TRAY_CHECK_UPDATES: u32 = 1003;
 const ID_TRAY_QUIT: u32 = 1004;
 
 const WM_TRAYICON: u32 = WM_USER + 0x42;
@@ -106,7 +105,6 @@ unsafe extern "system" fn wnd_proc(
 
                 let stop_resume = if st.is_held { "Resume" } else { "Stop" };
                 let stop_resume_w = wide(stop_resume);
-                let check_updates_w = wide("Check for updates…");
                 let quit_w = wide("Quit");
 
                 let _ = AppendMenuW(
@@ -114,12 +112,6 @@ unsafe extern "system" fn wnd_proc(
                     MENU_ITEM_FLAGS(0),
                     ID_TRAY_STOP_OR_RESUME as usize,
                     PCWSTR(stop_resume_w.as_ptr()),
-                );
-                let _ = AppendMenuW(
-                    hmenu,
-                    MENU_ITEM_FLAGS(0),
-                    ID_TRAY_CHECK_UPDATES as usize,
-                    PCWSTR(check_updates_w.as_ptr()),
                 );
                 let _ = AppendMenuW(
                     hmenu,
@@ -165,9 +157,6 @@ unsafe extern "system" fn wnd_proc(
                                 let _ = st.tx_ui.send(UiCmd::Stop);
                                 st.is_held = true; // update directly; avoid deadlock
                             }
-                        }
-                        ID_TRAY_CHECK_UPDATES => {
-                            updater::spawn_check(st.hwnd, st.version_str);
                         }
                         ID_TRAY_QUIT => {
                             // 1) Remove tray icon
