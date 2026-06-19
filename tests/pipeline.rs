@@ -13,6 +13,7 @@ fn core_layout() -> SimVarLayout {
     SimVarLayout::core_only()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn elems_from_flight(
     ias: f64,
     on_ground: f64,
