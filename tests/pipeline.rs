@@ -68,11 +68,15 @@ fn pipeline_flap_change_during_flight() {
     let layout = core_layout();
     let mut engine = RumbleEngine::new();
 
-    let cruise = elems_from_flight(150.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0);
+    let cruise = elems_from_flight(
+        150.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0,
+    );
     let cruise_fv = parse_main_elems(&cruise, &layout, false, cfg.ias_deadband_kn);
     let _ = engine.step(&cruise_fv, &cfg, 1, false);
 
-    let flaps = elems_from_flight(150.0, 0.0, 0.0, 50.0, 50.0, 2.0, 0.0, 0.0, 10.1, 0.0, 0.0, 0.0);
+    let flaps = elems_from_flight(
+        150.0, 0.0, 0.0, 50.0, 50.0, 2.0, 0.0, 0.0, 10.1, 0.0, 0.0, 0.0,
+    );
     let flaps_fv = parse_main_elems(&flaps, &layout, false, cfg.ias_deadband_kn);
     let out = engine.step(&flaps_fv, &cfg, 1, false);
 
@@ -88,7 +92,8 @@ fn pipeline_stall_ceiling() {
     let layout = core_layout();
     let mut engine = RumbleEngine::new();
 
-    let stall_elems = elems_from_flight(80.0, 0.0, 30.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0);
+    let stall_elems =
+        elems_from_flight(80.0, 0.0, 30.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0);
     let stall_fv = parse_main_elems(&stall_elems, &layout, false, cfg.ias_deadband_kn);
     let out = engine.step(&stall_fv, &cfg, 1, false);
 
@@ -107,11 +112,13 @@ fn pipeline_pause_zeros_output() {
     let active = engine.step(&fv, &cfg, 1, false);
     assert!(active.intensity > 0);
 
-    let paused_elem =
-        elems_from_flight(0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0);
+    let paused_elem = elems_from_flight(0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0);
     let paused_fv = parse_main_elems(&paused_elem, &layout, false, cfg.ias_deadband_kn);
     let paused = engine.step(&paused_fv, &cfg, 1, false);
-    assert_eq!(paused.intensity, 0, "parked paused without engine stays muted");
+    assert_eq!(
+        paused.intensity, 0,
+        "parked paused without engine stays muted"
+    );
 
     let held = engine.step(&fv, &cfg, 1, true);
     assert_eq!(held.intensity, 0);
@@ -127,7 +134,9 @@ fn pipeline_gear_retraction_bump() {
     let down_fv = parse_main_elems(&gear_down, &layout, false, cfg.ias_deadband_kn);
     let _ = engine.step(&down_fv, &cfg, 1, false);
 
-    let gear_up = elems_from_flight(150.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 5.05, 0.0, 0.0, 0.0);
+    let gear_up = elems_from_flight(
+        150.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 5.05, 0.0, 0.0, 0.0,
+    );
     let up_fv = parse_main_elems(&gear_up, &layout, false, cfg.ias_deadband_kn);
     let out = engine.step(&up_fv, &cfg, 1, false);
 
@@ -159,7 +168,9 @@ fn pipeline_frame_encoding_matches_intensity_at_each_step() {
     let mut engine = RumbleEngine::new();
     let steps = [
         elems_from_flight(0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.1, 6.0, 0.0, 0.0),
-        elems_from_flight(100.0, 0.0, 10.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0),
+        elems_from_flight(
+            100.0, 0.0, 10.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+        ),
     ];
 
     for (i, elems) in steps.iter().enumerate() {
@@ -209,7 +220,9 @@ fn pipeline_bank_wind_thump_in_flight() {
     let layout = core_layout();
     let mut engine = RumbleEngine::new();
 
-    let elems = elems_from_flight(150.0, 0.0, 30.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.15, 0.0, 0.0, 0.0);
+    let elems = elems_from_flight(
+        150.0, 0.0, 30.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.15, 0.0, 0.0, 0.0,
+    );
     let mut fv = parse_main_elems(&elems, &layout, false, cfg.ias_deadband_kn);
     let mut extras = std::collections::HashMap::new();
     extras.insert("wind_kt".to_string(), 25.0);

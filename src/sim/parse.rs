@@ -160,9 +160,10 @@ fn engine_rpm_from_index(extras: &HashMap<String, f64>, index: u32) -> Option<f6
             return Some(rated * pct / 100.0);
         }
     }
-    extras.get(&raw_key).copied().filter(|&raw| {
-        raw.is_finite() && (40.0..=12_000.0).contains(&raw)
-    })
+    extras
+        .get(&raw_key)
+        .copied()
+        .filter(|&raw| raw.is_finite() && (40.0..=12_000.0).contains(&raw))
 }
 
 /// Normalized engine power 0 (idle) .. 1 (max), from resolved physical RPM.
@@ -243,17 +244,17 @@ mod tests {
 
     fn sample_elems() -> [f64; 12] {
         [
-            120.0, // IAS
-            0.0,   // on ground
-            15.0,  // bank
-            50.0,  // flaps L
-            70.0,  // flaps R
-            2.0,   // flaps index
-            1.0,   // gear
-            0.0,   // stall
-            100.0, // sim time
-            25.0,  // ground speed
-            0.0,   // paused var
+            120.0,  // IAS
+            0.0,    // on ground
+            15.0,   // bank
+            50.0,   // flaps L
+            70.0,   // flaps R
+            2.0,    // flaps index
+            1.0,    // gear
+            0.0,    // stall
+            100.0,  // sim time
+            25.0,   // ground speed
+            0.0,    // paused var
             -200.0, // vertical speed (fpm)
         ]
     }
@@ -434,8 +435,7 @@ mod tests {
 
     #[test]
     fn extra_simvar_populates_extras_map() {
-        let layout =
-            SimVarLayout::core_only().with_extra_keys(vec!["spoilers_pct".to_string()]);
+        let layout = SimVarLayout::core_only().with_extra_keys(vec!["spoilers_pct".to_string()]);
         let mut e: Vec<f64> = sample_elems().to_vec();
         e.push(75.0);
         let fv = parse_main_elems(&e, &layout, false, 1.0);

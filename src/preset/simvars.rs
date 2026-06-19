@@ -94,7 +94,13 @@ fn push_aircraft_engine_extras(simvars: &mut SimVarProfile, twin: bool, turbine_
     );
     push_extra(simvars, "GENERAL ENG RPM", "Rpm", "eng_rpm_1", 1);
     if twin {
-        push_extra(simvars, "MAX RATED ENGINE RPM", "Rpm", "eng_max_rated_rpm_2", 2);
+        push_extra(
+            simvars,
+            "MAX RATED ENGINE RPM",
+            "Rpm",
+            "eng_max_rated_rpm_2",
+            2,
+        );
         push_extra(
             simvars,
             "GENERAL ENG PCT MAX RPM",

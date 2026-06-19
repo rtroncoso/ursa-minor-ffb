@@ -173,12 +173,8 @@ impl SimVarProfile {
     }
 
     pub fn layout(&self) -> SimVarLayout {
-        SimVarLayout::core_only().with_extra_keys(
-            self.extra
-                .iter()
-                .map(|d| d.key.clone())
-                .collect::<Vec<_>>(),
-        )
+        SimVarLayout::core_only()
+            .with_extra_keys(self.extra.iter().map(|d| d.key.clone()).collect::<Vec<_>>())
     }
 
     pub fn all_simvar_entries(&self) -> Vec<(&str, &str, u32)> {
@@ -614,13 +610,7 @@ mod tests {
         let loaded = store.load(PresetKind::GeneralAviation);
         assert_eq!(loaded.simvars.extra[0].key, scrambled.simvars.extra[0].key);
         assert_eq!(loaded.simvars.extra[1].key, scrambled.simvars.extra[1].key);
-        assert!(
-            loaded
-                .simvars
-                .extra
-                .iter()
-                .any(|d| d.key == "eng_rpm_1")
-        );
+        assert!(loaded.simvars.extra.iter().any(|d| d.key == "eng_rpm_1"));
 
         let _ = fs::remove_dir_all(&dir);
     }

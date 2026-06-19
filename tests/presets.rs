@@ -17,7 +17,11 @@ fn preset_store_bootstrap_creates_settings_only() {
         PresetKind::Fighter,
     ] {
         let path = dir.join(format!("{}.yml", kind.file_stem()));
-        assert!(!path.exists(), "bootstrap should not create {}", path.display());
+        assert!(
+            !path.exists(),
+            "bootstrap should not create {}",
+            path.display()
+        );
         let preset = store.load(kind);
         assert_eq!(preset.kind, kind);
         assert_eq!(preset, kind.built_in_default());

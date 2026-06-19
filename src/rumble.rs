@@ -98,9 +98,7 @@ impl RumbleEngine {
         let at_or_above_end = fv.on_ground && gs >= end;
         let at_or_above_start = fv.on_ground && gs >= start;
 
-        let parked_engine = fv.on_ground
-            && fv.eng_rpm >= ENGINE_OFF_RPM
-            && cfg.engine_vibe > 0.0;
+        let parked_engine = fv.on_ground && fv.eng_rpm >= ENGINE_OFF_RPM && cfg.engine_vibe > 0.0;
 
         if hold {
             return RumbleOutput {
@@ -143,7 +141,11 @@ impl RumbleEngine {
                 let dflap = (fv.flaps_pct - s.prev_flaps_pct).abs();
                 if dflap >= cfg.flaps_bump_eps_pct {
                     let scale = (dflap / 12.5).clamp(0.5, 1.0);
-                    trigger_flap_bump(s, cfg.flaps_bump_duration_s, (cfg.flaps_peak as f64) * scale);
+                    trigger_flap_bump(
+                        s,
+                        cfg.flaps_bump_duration_s,
+                        (cfg.flaps_peak as f64) * scale,
+                    );
                 }
                 s.prev_flaps_pct = fv.flaps_pct;
             }
@@ -642,7 +644,10 @@ mod tests {
         );
 
         let (max_i, saw_dot) = max_engine_output_over_window(&mut engine, &fv, &c, 1);
-        assert!(saw_dot, "engine dot must light when RPM present despite PAUSED simvar");
+        assert!(
+            saw_dot,
+            "engine dot must light when RPM present despite PAUSED simvar"
+        );
         assert!(max_i > 0, "engine HID output when parked, got {max_i}");
     }
 
@@ -847,7 +852,12 @@ mod tests {
         c.spoilers = 50.0;
         let with = engine2.step(&fv, &c, 1, false).intensity;
         assert!(with > without);
-        assert!(engine2.step(&fv, &c, 1, false).effects.spoilers_boost_active);
+        assert!(
+            engine2
+                .step(&fv, &c, 1, false)
+                .effects
+                .spoilers_boost_active
+        );
     }
 
     #[test]

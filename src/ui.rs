@@ -12,9 +12,9 @@ use std::{
     time::{Duration, Instant},
 };
 use windows::core::PCWSTR;
+use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-use windows::Win32::Foundation::HWND;
 
 use crate::{
     preset::{Preset, PresetKind, PresetShared, PresetStore},
@@ -68,7 +68,9 @@ fn chevron_button(ui: &mut egui::Ui, direction: Chevron) -> egui::Response {
         let icon_rect = rect.shrink(5.0);
         let stroke = egui::Stroke::new(1.75 * (icon_rect.width() / 24.0), color);
         let points = match direction {
-            Chevron::Down => heroicon_points(icon_rect, &[(19.5, 8.25), (12.0, 15.75), (4.5, 8.25)]),
+            Chevron::Down => {
+                heroicon_points(icon_rect, &[(19.5, 8.25), (12.0, 15.75), (4.5, 8.25)])
+            }
             Chevron::Up => heroicon_points(icon_rect, &[(4.5, 15.75), (12.0, 8.25), (19.5, 15.75)]),
         };
         ui.painter().line_segment([points[0], points[1]], stroke);
@@ -191,7 +193,11 @@ impl UiState {
     }
 
     fn dismiss_expired_toast(&mut self) {
-        if self.toast.as_ref().is_some_and(|t| Instant::now() >= t.expires) {
+        if self
+            .toast
+            .as_ref()
+            .is_some_and(|t| Instant::now() >= t.expires)
+        {
             self.toast = None;
         }
     }

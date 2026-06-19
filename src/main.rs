@@ -93,14 +93,8 @@ fn main() -> Result<()> {
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([
-                ursa_minor_ffb::ui::WINDOW_WIDTH,
-                initial_height,
-            ])
-            .with_min_inner_size([
-                420.0,
-                ursa_minor_ffb::ui::WINDOW_HEIGHT_COLLAPSED,
-            ])
+            .with_inner_size([ursa_minor_ffb::ui::WINDOW_WIDTH, initial_height])
+            .with_min_inner_size([420.0, ursa_minor_ffb::ui::WINDOW_HEIGHT_COLLAPSED])
             .with_resizable(false)
             .with_maximize_button(false)
             .with_minimize_button(true),

@@ -13,7 +13,9 @@ use parking_lot::Mutex;
 
 use crate::preset::{PresetShared, SimVarLayout, SimVarProfile, CORE_SIMVARS, CORE_SIMVAR_COUNT};
 use crate::rumble::RumbleEngine;
-use crate::sim::parse::{flight_status, merge_extras, parse_extra_elems, parse_main_elems, finalize_flight_vars};
+use crate::sim::parse::{
+    finalize_flight_vars, flight_status, merge_extras, parse_extra_elems, parse_main_elems,
+};
 use crate::{EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus};
 
 type DWord = u32;
@@ -273,9 +275,7 @@ pub fn sim_worker(
             };
 
             let core_fields = SimVarLayout::core_only().fields;
-            let mut session_core_layout = SimVarLayout {
-                fields: Vec::new(),
-            };
+            let mut session_core_layout = SimVarLayout { fields: Vec::new() };
             let mut session_extra_keys: Vec<String> = Vec::new();
             let mut core_registered = 0usize;
             let mut extras_registered = 0usize;
@@ -503,10 +503,7 @@ pub fn sim_worker(
                                 }
 
                                 let (expected, max_elem_count) = if sod.dw_request_id == REQ_CORE {
-                                    (
-                                        session_core_layout.total_count(),
-                                        core_field_count,
-                                    )
+                                    (session_core_layout.total_count(), core_field_count)
                                 } else {
                                     (session_extra_keys.len(), session_extra_keys.len())
                                 };
@@ -643,7 +640,10 @@ pub fn sim_worker(
                             ));
                         }
                     } else if main_seen {
-                        logs.push("Sim: no main frames in last 5s (sim paused or disconnected?)".to_string());
+                        logs.push(
+                            "Sim: no main frames in last 5s (sim paused or disconnected?)"
+                                .to_string(),
+                        );
                     }
                     main_frame_count = 0;
                     last_frame_diag = Instant::now();
