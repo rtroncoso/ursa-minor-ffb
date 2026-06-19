@@ -5,7 +5,7 @@ use ursa_minor_ffb::sim::parse::parse_main_elems;
 use ursa_minor_ffb::SimVarLayout;
 
 #[test]
-fn preset_store_bootstrap_creates_built_in_files() {
+fn preset_store_bootstrap_creates_settings_only() {
     let dir = std::env::temp_dir().join(format!("ursa-presets-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     let store = PresetStore::new(dir.clone());
@@ -17,9 +17,10 @@ fn preset_store_bootstrap_creates_built_in_files() {
         PresetKind::Fighter,
     ] {
         let path = dir.join(format!("{}.yml", kind.file_stem()));
-        assert!(path.exists(), "missing {}", path.display());
+        assert!(!path.exists(), "bootstrap should not create {}", path.display());
         let preset = store.load(kind);
         assert_eq!(preset.kind, kind);
+        assert_eq!(preset, kind.built_in_default());
     }
 
     assert!(dir.join("settings.yml").exists());
@@ -50,19 +51,18 @@ fn commercial_layout_parses_spoilers_extra() {
 }
 
 #[test]
-fn preset_store_save_and_load_custom() {
-    let dir = std::env::temp_dir().join(format!("ursa-presets-custom-{}", std::process::id()));
+fn preset_store_save_and_load_overrides_code_defaults() {
+    let dir = std::env::temp_dir().join(format!("ursa-presets-save-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     let store = PresetStore::new(dir.clone());
     store.bootstrap().unwrap();
 
-    let mut custom = PresetKind::Commercial.built_in_default();
-    custom.kind = PresetKind::Custom;
-    custom.rumble.base_airspeed = 99.0;
-    store.save(&custom).unwrap();
+    let mut saved = PresetKind::Commercial.built_in_default();
+    saved.rumble.base_airspeed = 99.0;
+    store.save(&saved).unwrap();
 
-    let loaded = store.load(PresetKind::Custom);
-    assert_eq!(loaded.kind, PresetKind::Custom);
+    let loaded = store.load(PresetKind::Commercial);
+    assert_eq!(loaded.kind, PresetKind::Commercial);
     assert_eq!(loaded.rumble.base_airspeed, 99.0);
 
     let _ = fs::remove_dir_all(&dir);

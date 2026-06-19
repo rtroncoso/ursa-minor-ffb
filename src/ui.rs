@@ -4,12 +4,16 @@ use egui_extras::{Column, TableBuilder};
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use parking_lot::Mutex;
 use std::{
+    os::windows::ffi::OsStrExt,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
+use windows::core::PCWSTR;
+use windows::Win32::UI::Shell::ShellExecuteW;
+use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::Win32::Foundation::HWND;
 
 use crate::{
@@ -22,6 +26,64 @@ pub enum Tab {
     Main,
     #[cfg(debug_assertions)]
     Debug,
+}
+
+const TOAST_DURATION: Duration = Duration::from_secs(3);
+const TOAST_BOTTOM_MARGIN: f32 = 16.0;
+const SQUARE_BUTTON_ROUNDING: f32 = 4.0;
+
+pub const WINDOW_WIDTH: f32 = 500.0;
+pub const WINDOW_HEIGHT_EXPANDED: f32 = 600.0;
+pub const LIVE_DATA_EXTRA_HEIGHT: f32 = 180.0;
+pub const WINDOW_HEIGHT_COLLAPSED: f32 = WINDOW_HEIGHT_EXPANDED - LIVE_DATA_EXTRA_HEIGHT;
+
+#[derive(Clone, Copy)]
+enum Chevron {
+    Up,
+    Down,
+}
+
+#[derive(Clone)]
+pub struct Toast {
+    message: String,
+    error: bool,
+    expires: Instant,
+}
+
+fn square_button_side(ui: &egui::Ui) -> f32 {
+    ui.style().spacing.interact_size.y
+}
+
+fn chevron_button(ui: &mut egui::Ui, direction: Chevron) -> egui::Response {
+    let side = square_button_side(ui);
+    let size = Vec2::splat(side);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact_selectable(&response, false);
+        let rounding = egui::Rounding::same(SQUARE_BUTTON_ROUNDING);
+        ui.painter().rect_filled(rect, rounding, visuals.bg_fill);
+        ui.painter().rect_stroke(rect, rounding, visuals.bg_stroke);
+
+        let color = visuals.fg_stroke.color;
+        let icon_rect = rect.shrink(5.0);
+        let stroke = egui::Stroke::new(1.75 * (icon_rect.width() / 24.0), color);
+        let points = match direction {
+            Chevron::Down => heroicon_points(icon_rect, &[(19.5, 8.25), (12.0, 15.75), (4.5, 8.25)]),
+            Chevron::Up => heroicon_points(icon_rect, &[(4.5, 15.75), (12.0, 8.25), (19.5, 15.75)]),
+        };
+        ui.painter().line_segment([points[0], points[1]], stroke);
+        ui.painter().line_segment([points[1], points[2]], stroke);
+    }
+    response
+}
+
+fn heroicon_points(rect: egui::Rect, coords: &[(f32, f32); 3]) -> [egui::Pos2; 3] {
+    coords.map(|(x, y)| {
+        egui::pos2(
+            rect.left() + (x / 24.0) * rect.width(),
+            rect.top() + (y / 24.0) * rect.height(),
+        )
+    })
 }
 
 fn circle_indicator_colored(ui: &mut egui::Ui, color: Color32, filled: bool) {
@@ -75,8 +137,10 @@ pub struct UiState {
 
     pub config: Arc<PresetShared>,
     pub preset_store: PresetStore,
-    pub saved_custom: Preset,
-    pub preset_status: Option<String>,
+    pub saved_baseline: Preset,
+    pub toast: Option<Toast>,
+    pub show_reset_confirm: bool,
+    pub show_live_aircraft_data: bool,
     pub effects: EffectsShared,
 
     #[cfg(debug_assertions)]
@@ -108,36 +172,129 @@ impl UiState {
         ui.label(RichText::new(format!("{}: {}", k, v.into())).strong());
     }
 
-    fn custom_needs_save(&self) -> bool {
-        if self.config.kind() != PresetKind::Custom {
-            return false;
+    fn preset_needs_save(&self) -> bool {
+        self.config.get() != self.saved_baseline
+    }
+
+    fn preset_can_reset(&self) -> bool {
+        let kind = self.config.kind();
+        let default = kind.built_in_default();
+        self.config.get() != default || self.saved_baseline != default
+    }
+
+    fn show_toast(&mut self, message: impl Into<String>, error: bool) {
+        self.toast = Some(Toast {
+            message: message.into(),
+            error,
+            expires: Instant::now() + TOAST_DURATION,
+        });
+    }
+
+    fn dismiss_expired_toast(&mut self) {
+        if self.toast.as_ref().is_some_and(|t| Instant::now() >= t.expires) {
+            self.toast = None;
         }
-        let current = self.config.get();
-        current.rumble != self.saved_custom.rumble || current.simvars != self.saved_custom.simvars
+    }
+
+    fn draw_toast(&self, ctx: &egui::Context) {
+        let Some(toast) = &self.toast else {
+            return;
+        };
+
+        let (fill, accent) = if toast.error {
+            (
+                Color32::from_rgba_unmultiplied(48, 22, 22, 230),
+                Color32::from_rgb(220, 90, 90),
+            )
+        } else {
+            (
+                Color32::from_rgba_unmultiplied(18, 42, 30, 230),
+                Color32::from_rgb(50, 200, 110),
+            )
+        };
+
+        egui::Area::new(egui::Id::new("preset_toast"))
+            .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -TOAST_BOTTOM_MARGIN])
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                egui::Frame::default()
+                    .fill(fill)
+                    .stroke(egui::Stroke::new(1.0, accent.gamma_multiply(0.7)))
+                    .inner_margin(egui::Margin::symmetric(14.0, 10.0))
+                    .rounding(egui::Rounding::same(8.0))
+                    .shadow(egui::epaint::Shadow {
+                        offset: egui::vec2(0.0, 2.0),
+                        blur: 8.0,
+                        spread: 0.0,
+                        color: Color32::from_black_alpha(80),
+                    })
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(&toast.message).color(accent));
+                    });
+            });
+    }
+
+    fn set_live_aircraft_data_visible(&mut self, ctx: &egui::Context, visible: bool) {
+        self.show_live_aircraft_data = visible;
+        let mut settings = self.preset_store.load_settings();
+        settings.show_live_aircraft_data = visible;
+        let _ = self.preset_store.save_settings(&settings);
+        self.resize_for_live_data_panel(ctx);
+    }
+
+    fn resize_for_live_data_panel(&self, ctx: &egui::Context) {
+        let height = if self.show_live_aircraft_data {
+            WINDOW_HEIGHT_EXPANDED
+        } else {
+            WINDOW_HEIGHT_COLLAPSED
+        };
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+            WINDOW_WIDTH,
+            height,
+        )));
     }
 
     fn select_preset(&mut self, kind: PresetKind) {
         let preset = self.preset_store.load(kind);
-        self.config.set(preset);
-        if kind == PresetKind::Custom {
-            self.saved_custom = self.preset_store.load(PresetKind::Custom);
-        }
-        self.preset_status = None;
+        self.config.set(preset.clone());
+        self.saved_baseline = preset;
+        self.toast = None;
         let _ = self.preset_store.save_active(kind);
     }
 
-    fn save_custom_preset(&mut self) {
-        let mut preset = self.config.get();
-        preset.kind = PresetKind::Custom;
+    fn save_current_preset(&mut self) {
+        let preset = self.config.get();
         match self.preset_store.save(&preset) {
             Ok(()) => {
-                self.saved_custom = preset;
-                let _ = self.preset_store.save_active(PresetKind::Custom);
-                self.preset_status = Some("Saved custom preset.".to_string());
+                self.saved_baseline = preset.clone();
+                self.show_toast(format!("Saved {} preset.", preset.kind.label()), false);
             }
             Err(e) => {
-                self.preset_status = Some(format!("Save failed: {e}"));
+                self.show_toast(format!("Save failed: {e}"), true);
             }
+        }
+    }
+
+    fn confirm_reset_preset(&mut self) {
+        let kind = self.config.kind();
+        let preset = self.preset_store.reset_to_built_in(kind);
+        self.config.set(preset.clone());
+        self.saved_baseline = preset;
+        self.show_toast(format!("Reset {} to defaults.", kind.label()), false);
+    }
+
+    fn open_presets_folder(&self) {
+        let dir = self.preset_store.dir();
+        let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
+        unsafe {
+            let _ = ShellExecuteW(
+                None,
+                windows::core::w!("open"),
+                PCWSTR(wide.as_ptr()),
+                PCWSTR::null(),
+                PCWSTR::null(),
+                SW_SHOWNORMAL,
+            );
         }
     }
 
@@ -151,7 +308,7 @@ impl UiState {
     ) {
         egui::Grid::new(format!("row_{}", name))
             .num_columns(3)
-            .spacing(Vec2::new(12.0, 6.0))
+            .spacing(Vec2::new(12.0, 8.0))
             .show(ui, |ui| {
                 ui.label(RichText::new(name).strong());
                 let desired_h = ui.style().spacing.interact_size.y;
@@ -182,7 +339,7 @@ impl UiState {
     ) {
         egui::Grid::new(format!("taxi_{}", name))
             .num_columns(3)
-            .spacing(Vec2::new(12.0, 6.0))
+            .spacing(Vec2::new(12.0, 8.0))
             .show(ui, |ui| {
                 ui.label(RichText::new(name).strong());
 
@@ -270,6 +427,8 @@ impl eframe::App for UiState {
             });
         });
 
+        self.dismiss_expired_toast();
+
         let show_main = true;
         #[cfg(debug_assertions)]
         let show_debug = self.active_tab == Tab::Debug;
@@ -278,7 +437,16 @@ impl eframe::App for UiState {
         let _ = show_debug;
 
         if show_main {
-            egui::CentralPanel::default().show(ctx, |ui| {
+            let mut panel_frame = egui::Frame::central_panel(&ctx.style());
+            panel_frame.inner_margin = egui::Margin {
+                left: 12.0,
+                right: 12.0,
+                top: 8.0,
+                bottom: 48.0,
+            };
+            egui::CentralPanel::default()
+                .frame(panel_frame)
+                .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Preset").strong());
                     let current = self.config.kind();
@@ -295,24 +463,51 @@ impl eframe::App for UiState {
                     ui.with_layout(
                         egui::Layout::right_to_left(egui::Align::Center),
                         |ui| {
-                            let save_enabled = self.custom_needs_save();
+                            if ui.button("📁").on_hover_text("Open presets folder").clicked()
+                            {
+                                self.open_presets_folder();
+                            }
+                            let save_enabled = self.preset_needs_save();
                             if ui
                                 .add_enabled(save_enabled, egui::Button::new("Save"))
                                 .clicked()
                             {
-                                self.save_custom_preset();
+                                self.save_current_preset();
+                            }
+                            let reset_enabled = self.preset_can_reset();
+                            if ui
+                                .add_enabled(reset_enabled, egui::Button::new("Reset"))
+                                .clicked()
+                            {
+                                self.show_reset_confirm = true;
                             }
                         },
                     );
                 });
 
-                if let Some(msg) = &self.preset_status {
-                    ui.colored_label(Color32::from_rgb(30, 180, 90), msg);
+                if self.show_reset_confirm {
+                    egui::Window::new("Reset preset")
+                        .collapsible(false)
+                        .resizable(false)
+                        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                        .show(ctx, |ui| {
+                            ui.label("Reset this preset to factory defaults?");
+                            ui.label("This action cannot be undone. Your saved preset file will be deleted.");
+                            ui.horizontal(|ui| {
+                                if ui.button("Cancel").clicked() {
+                                    self.show_reset_confirm = false;
+                                }
+                                if ui.button("Reset").clicked() {
+                                    self.confirm_reset_preset();
+                                    self.show_reset_confirm = false;
+                                }
+                            });
+                        });
                 }
 
-                ui.add_space(4.0);
+                ui.add_space(8.0);
                 ui.heading("Rumble Effects");
-                ui.add_space(4.0);
+                ui.add_space(6.0);
 
                 let mut _changed = false;
 
@@ -427,17 +622,40 @@ impl eframe::App for UiState {
                         &mut _changed,
                     );
 
-                    if _changed && kind != PresetKind::Custom {
-                        self.preset_status = None;
-                        PresetKind::Custom
-                    } else {
-                        kind
+                    if _changed {
+                        self.toast = None;
                     }
+                    kind
                 });
 
+                ui.add_space(8.0);
                 ui.separator();
+                ui.add_space(6.0);
 
-                ui.heading("Live Aircraft Data");
+                ui.horizontal(|ui| {
+                    ui.heading("Live Aircraft Data");
+                    ui.with_layout(
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            let chevron = if self.show_live_aircraft_data {
+                                Chevron::Down
+                            } else {
+                                Chevron::Up
+                            };
+                            if chevron_button(ui, chevron)
+                                .on_hover_text("Show/hide live aircraft data")
+                                .clicked()
+                            {
+                                self.set_live_aircraft_data_visible(
+                                    ctx,
+                                    !self.show_live_aircraft_data,
+                                );
+                            }
+                        },
+                    );
+                });
+
+                if self.show_live_aircraft_data {
                 let ac = self.aircraft_title.lock().clone();
                 if !ac.is_empty() {
                     UiState::kv_line(ui, "Aircraft", ac);
@@ -501,7 +719,14 @@ impl eframe::App for UiState {
                         UiState::kv_line(ui, "Paused", "—");
                     }
                 }
+                }
             });
+        }
+
+        self.draw_toast(ctx);
+        if let Some(toast) = &self.toast {
+            let remaining = toast.expires.saturating_duration_since(Instant::now());
+            ctx.request_repaint_after(remaining.min(Duration::from_millis(50)));
         }
 
         #[cfg(debug_assertions)]

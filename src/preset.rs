@@ -19,15 +19,13 @@ pub enum PresetKind {
     #[default]
     Commercial,
     Fighter,
-    Custom,
 }
 
 impl PresetKind {
-    pub const ALL: [PresetKind; 4] = [
+    pub const ALL: [PresetKind; 3] = [
         PresetKind::GeneralAviation,
         PresetKind::Commercial,
         PresetKind::Fighter,
-        PresetKind::Custom,
     ];
 
     pub fn label(self) -> &'static str {
@@ -35,7 +33,6 @@ impl PresetKind {
             PresetKind::GeneralAviation => "General Aviation",
             PresetKind::Commercial => "Commercial",
             PresetKind::Fighter => "Fighter",
-            PresetKind::Custom => "Custom",
         }
     }
 
@@ -44,12 +41,18 @@ impl PresetKind {
             PresetKind::GeneralAviation => "general_aviation",
             PresetKind::Commercial => "commercial",
             PresetKind::Fighter => "fighter",
-            PresetKind::Custom => "custom",
         }
     }
 
-    pub fn is_built_in(self) -> bool {
-        !matches!(self, PresetKind::Custom)
+    pub fn from_settings_str(s: &str) -> Self {
+        match s {
+            "general_aviation" => PresetKind::GeneralAviation,
+            "commercial" => PresetKind::Commercial,
+            "fighter" => PresetKind::Fighter,
+            // Legacy: custom preset slot removed; treat as Commercial.
+            "custom" => PresetKind::Commercial,
+            _ => PresetKind::Commercial,
+        }
     }
 
     pub fn built_in_default(self) -> Preset {
@@ -118,9 +121,6 @@ impl PresetKind {
                 rumble.ias_deadband_kn = 0.5;
                 rumble.flaps_bump_duration_s = 0.6;
                 rumble.gear_bump_duration_s = 0.5;
-            }
-            PresetKind::Custom => {
-                return PresetKind::Commercial.built_in_default();
             }
         }
 
@@ -311,9 +311,31 @@ impl Preset {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppSettings {
+    pub active: PresetKind,
+    #[serde(default = "default_show_live_aircraft_data")]
+    pub show_live_aircraft_data: bool,
+}
+
+fn default_show_live_aircraft_data() -> bool {
+    true
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            active: PresetKind::Commercial,
+            show_live_aircraft_data: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct SettingsFile {
-    active: PresetKind,
+    active: String,
+    #[serde(default = "default_show_live_aircraft_data")]
+    show_live_aircraft_data: bool,
 }
 
 pub struct PresetStore {
@@ -344,18 +366,9 @@ impl PresetStore {
 
     pub fn bootstrap(&self) -> std::io::Result<()> {
         fs::create_dir_all(&self.dir)?;
-        for kind in PresetKind::ALL {
-            if kind == PresetKind::Custom {
-                continue;
-            }
-            let path = self.preset_path(kind);
-            if !path.exists() {
-                self.write_preset_file(kind, &kind.built_in_default())?;
-            }
-        }
         let settings_path = self.settings_path();
         if !settings_path.exists() {
-            self.save_active(PresetKind::Commercial)?;
+            self.save_settings(&AppSettings::default())?;
         }
         Ok(())
     }
@@ -372,48 +385,25 @@ impl PresetStore {
         let default = kind.built_in_default();
         let path = self.preset_path(kind);
 
-        let mut preset = if kind == PresetKind::Custom {
-            let mut from_disk = if path.exists() {
-                if let Ok(text) = fs::read_to_string(&path) {
-                    if let Ok(mut preset) = serde_yaml::from_str::<Preset>(&text) {
-                        preset.kind = PresetKind::Custom;
-                        preset
-                    } else {
-                        default.clone()
-                    }
-                } else {
-                    default.clone()
-                }
-            } else {
-                default.clone()
-            };
-            from_disk.kind = PresetKind::Custom;
-            from_disk.simvars.strip_obsolete_extras();
-            from_disk.apply_canonical_simvars(PresetKind::Commercial);
-            from_disk.merge_rumble_from(&default);
-            from_disk
-        } else if path.exists() {
-            if let Ok(text) = fs::read_to_string(&path) {
-                if let Ok(from_disk) = serde_yaml::from_str::<Preset>(&text) {
-                    Preset {
-                        kind,
-                        rumble: from_disk.rumble,
-                        simvars: default.simvars.clone(),
-                    }
-                } else {
-                    default.clone()
-                }
-            } else {
-                default.clone()
-            }
-        } else {
-            default.clone()
+        if !path.exists() {
+            return default;
+        }
+
+        let from_disk = fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_yaml::from_str::<Preset>(&text).ok());
+
+        let Some(from_disk) = from_disk else {
+            return default;
         };
 
+        let mut preset = default.clone();
+        preset.rumble = from_disk.rumble;
+        preset.merge_rumble_from(&default);
+        preset
+            .simvars
+            .merge_from_disk(&from_disk.simvars, &default.simvars);
         preset.kind = kind;
-        if kind != PresetKind::Custom {
-            preset.merge_rumble_from(&default);
-        }
         preset
     }
 
@@ -431,31 +421,42 @@ impl PresetStore {
         fs::write(path, text)
     }
 
-    pub fn load_active(&self) -> PresetKind {
+    pub fn load_settings(&self) -> AppSettings {
         let path = self.settings_path();
         if path.exists() {
             if let Ok(text) = fs::read_to_string(&path) {
                 if let Ok(settings) = serde_yaml::from_str::<SettingsFile>(&text) {
-                    return settings.active;
+                    return AppSettings {
+                        active: PresetKind::from_settings_str(&settings.active),
+                        show_live_aircraft_data: settings.show_live_aircraft_data,
+                    };
                 }
             }
         }
-        PresetKind::Commercial
+        AppSettings::default()
     }
 
-    pub fn save_active(&self, kind: PresetKind) -> std::io::Result<()> {
+    pub fn save_settings(&self, settings: &AppSettings) -> std::io::Result<()> {
         fs::create_dir_all(&self.dir)?;
-        let settings = SettingsFile { active: kind };
-        let text = serde_yaml::to_string(&settings)
+        let text = serde_yaml::to_string(settings)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         fs::write(self.settings_path(), text)
     }
 
+    pub fn load_active(&self) -> PresetKind {
+        self.load_settings().active
+    }
+
+    pub fn save_active(&self, kind: PresetKind) -> std::io::Result<()> {
+        let mut settings = self.load_settings();
+        settings.active = kind;
+        self.save_settings(&settings)
+    }
+
     pub fn reset_to_built_in(&self, kind: PresetKind) -> Preset {
-        assert_ne!(kind, PresetKind::Custom, "custom preset is never reset from built-in defaults");
-        let preset = kind.built_in_default();
-        let _ = self.write_preset_file(kind, &preset);
-        preset
+        let path = self.preset_path(kind);
+        let _ = fs::remove_file(path);
+        kind.built_in_default()
     }
 }
 
@@ -600,7 +601,7 @@ mod tests {
     }
 
     #[test]
-    fn load_ignores_yaml_simvar_order_and_uses_canonical() {
+    fn load_preserves_saved_simvar_order() {
         let dir = std::env::temp_dir().join(format!("ursa-order-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let store = PresetStore::new(dir.clone());
@@ -611,8 +612,8 @@ mod tests {
         store.save(&scrambled).unwrap();
 
         let loaded = store.load(PresetKind::GeneralAviation);
-        let canonical = PresetKind::GeneralAviation.built_in_default();
-        assert_eq!(loaded.simvars.extra, canonical.simvars.extra);
+        assert_eq!(loaded.simvars.extra[0].key, scrambled.simvars.extra[0].key);
+        assert_eq!(loaded.simvars.extra[1].key, scrambled.simvars.extra[1].key);
         assert!(
             loaded
                 .simvars
@@ -620,6 +621,68 @@ mod tests {
                 .iter()
                 .any(|d| d.key == "eng_rpm_1")
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reset_deletes_disk_override() {
+        let dir = std::env::temp_dir().join(format!("ursa-reset-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let store = PresetStore::new(dir.clone());
+        store.bootstrap().unwrap();
+
+        let mut custom = PresetKind::Commercial.built_in_default();
+        custom.rumble.base_airspeed = 99.0;
+        store.save(&custom).unwrap();
+
+        let path = dir.join("commercial.yml");
+        assert!(path.exists());
+
+        let reset = store.reset_to_built_in(PresetKind::Commercial);
+        assert!(!path.exists());
+        assert_eq!(reset.rumble.base_airspeed, 18.0);
+
+        let loaded = store.load(PresetKind::Commercial);
+        assert_eq!(loaded.rumble.base_airspeed, 18.0);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_active_migrates_legacy_custom() {
+        let dir = std::env::temp_dir().join(format!("ursa-active-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let store = PresetStore::new(dir.clone());
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("settings.yml"), "active: custom\n").unwrap();
+
+        let settings = store.load_settings();
+        assert_eq!(settings.active, PresetKind::Commercial);
+        assert!(settings.show_live_aircraft_data);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn settings_roundtrip_preserves_show_live_aircraft_data() {
+        let dir = std::env::temp_dir().join(format!("ursa-settings-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let store = PresetStore::new(dir.clone());
+        store.bootstrap().unwrap();
+
+        let mut settings = store.load_settings();
+        settings.show_live_aircraft_data = false;
+        store.save_settings(&settings).unwrap();
+
+        let loaded = store.load_settings();
+        assert_eq!(loaded.active, PresetKind::Commercial);
+        assert!(!loaded.show_live_aircraft_data);
+
+        store.save_active(PresetKind::Fighter).unwrap();
+        let after_preset_change = store.load_settings();
+        assert_eq!(after_preset_change.active, PresetKind::Fighter);
+        assert!(!after_preset_change.show_live_aircraft_data);
 
         let _ = fs::remove_dir_all(&dir);
     }

@@ -3,7 +3,7 @@
 use ursa_minor_ffb::{
     hid::hid_worker,
     log::LogBuffer,
-    preset::{PresetKind, PresetShared, PresetStore},
+    preset::{PresetShared, PresetStore},
     sim::sim_worker,
     ui::{Tab, UiState},
     EffectsShared, EffectsState, FlightVars, HidCmd, UiCmd,
@@ -44,11 +44,17 @@ fn main() -> Result<()> {
         ));
     }
 
-    let active_kind = preset_store.load_active();
-    let mut initial_preset = preset_store.load(active_kind);
-    initial_preset.kind = active_kind;
-    let saved_custom = preset_store.load(PresetKind::Custom);
+    let app_settings = preset_store.load_settings();
+    let active_kind = app_settings.active;
+    let initial_preset = preset_store.load(active_kind);
+    let saved_baseline = initial_preset.clone();
     let config = Arc::new(PresetShared::new(initial_preset));
+
+    let initial_height = if app_settings.show_live_aircraft_data {
+        ursa_minor_ffb::ui::WINDOW_HEIGHT_EXPANDED
+    } else {
+        ursa_minor_ffb::ui::WINDOW_HEIGHT_COLLAPSED
+    };
 
     match logs.try_init_file_prefer_exe_dir() {
         Ok(p) => logs.push(format!("File logging enabled → {}", p.display())),
@@ -87,8 +93,14 @@ fn main() -> Result<()> {
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([478.0, 560.0])
-            .with_min_inner_size([400.0, 460.0])
+            .with_inner_size([
+                ursa_minor_ffb::ui::WINDOW_WIDTH,
+                initial_height,
+            ])
+            .with_min_inner_size([
+                420.0,
+                ursa_minor_ffb::ui::WINDOW_HEIGHT_COLLAPSED,
+            ])
             .with_resizable(false)
             .with_maximize_button(false)
             .with_minimize_button(true),
@@ -103,8 +115,10 @@ fn main() -> Result<()> {
 
         config,
         preset_store,
-        saved_custom,
-        preset_status: None,
+        saved_baseline,
+        toast: None,
+        show_reset_confirm: false,
+        show_live_aircraft_data: app_settings.show_live_aircraft_data,
         effects,
 
         #[cfg(debug_assertions)]

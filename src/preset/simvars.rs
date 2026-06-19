@@ -1,6 +1,5 @@
 //! Canonical SimConnect simvar names and units (MSFS SDK spelling).
-//! Runtime always uses these definitions from code — YAML only stores rumble sliders.
-
+//! Code provides defaults; saved YAML overrides with fallback for new keys from updates.
 use super::{PresetKind, SimVarDef, SimVarProfile, SIMCONNECT_UNUSED_DATUM};
 
 pub const OBSOLETE_EXTRA_KEYS: &[&str] = &["recip_mag_l", "recip_mag_r", "prop_rpm_1"];
@@ -38,9 +37,6 @@ pub fn canonical_extras_for(kind: PresetKind) -> SimVarProfile {
         }
         PresetKind::Fighter => {
             push_aircraft_engine_extras(&mut simvars, false, true);
-        }
-        PresetKind::Custom => {
-            return canonical_extras_for(PresetKind::Commercial);
         }
     }
     simvars
@@ -130,6 +126,28 @@ fn push_extra(simvars: &mut SimVarProfile, name: &str, unit: &str, key: &str, da
 }
 
 impl SimVarProfile {
+    /// Disk extras override code defaults; new canonical keys from updates are appended.
+    pub fn merge_from_disk(&mut self, disk: &SimVarProfile, canonical: &SimVarProfile) {
+        let mut disk_extras: Vec<SimVarDef> = disk
+            .extra
+            .iter()
+            .filter(|d| !OBSOLETE_EXTRA_KEYS.contains(&d.key.as_str()))
+            .cloned()
+            .collect();
+        for def in &mut disk_extras {
+            def.normalize_datum_suffix();
+        }
+
+        let disk_keys: std::collections::HashSet<String> =
+            disk_extras.iter().map(|d| d.key.clone()).collect();
+        for def in &canonical.extra {
+            if !disk_keys.contains(&def.key) {
+                disk_extras.push(def.clone());
+            }
+        }
+        self.extra = disk_extras;
+    }
+
     /// Replace extras with the canonical built-in list (order, names, units). User rumble sliders are untouched.
     pub fn apply_canonical_extras(&mut self, canonical: &SimVarProfile) {
         self.extra = canonical.extra.clone();
