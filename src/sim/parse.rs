@@ -8,7 +8,6 @@ use crate::{FlightVars, RumbleConfig, SimStatus};
 /// Regression guard: pause must be finalized **after** extras merge so `eng_rpm` is
 /// available. Otherwise parked engine rumble is silenced. See `finalize_flight_vars` and
 /// `tests/engine_pause.rs`.
-
 pub fn parse_main_elems(
     elem: &[f64],
     layout: &SimVarLayout,
@@ -491,8 +490,10 @@ mod tests {
 
     #[test]
     fn engine_power_norm_prefers_pct_max_rpm() {
-        let mut fv = FlightVars::default();
-        fv.eng_rpm = 4000.0;
+        let fv = FlightVars {
+            eng_rpm: 4000.0,
+            ..Default::default()
+        };
         let cfg = RumbleConfig {
             eng_rpm_idle: 2500.0,
             eng_rpm_max: 5200.0,

@@ -36,8 +36,6 @@ pub fn is_ursa_minor_right(pid: u16) -> bool {
 pub fn handed_selector_for_pid(pid: u16) -> u8 {
     if is_ursa_minor_right(pid) {
         0x08
-    } else if is_ursa_minor_left(pid) {
-        0x07
     } else {
         0x07
     }

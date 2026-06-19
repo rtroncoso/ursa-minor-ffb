@@ -204,15 +204,10 @@ pub enum UiCmd {
     Quit,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum SimStatus {
+    #[default]
     Disconnected,
     Connected,
     InFlight,
-}
-
-impl Default for SimStatus {
-    fn default() -> Self {
-        Self::Disconnected
-    }
 }
