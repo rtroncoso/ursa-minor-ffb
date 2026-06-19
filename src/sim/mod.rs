@@ -1,13 +1,13 @@
 pub mod parse;
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "app"))]
 mod worker;
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "app"))]
 pub use worker::sim_worker;
 
-#[cfg(not(windows))]
+#[cfg(any(not(windows), not(feature = "app")))]
 mod stub;
 
-#[cfg(not(windows))]
+#[cfg(any(not(windows), not(feature = "app")))]
 pub use stub::sim_worker;

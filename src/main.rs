@@ -13,16 +13,12 @@ use anyhow::Result;
 use crossbeam_channel::unbounded;
 use parking_lot::Mutex;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::AtomicBool,
     Arc,
 };
 use std::{thread, time::Duration};
 
 fn main() -> Result<()> {
-    if ursa_minor_ffb::updater::early_self_update_hook() {
-        return Ok(());
-    }
-
     let (tx_hid, rx_hid) = unbounded::<HidCmd>();
     let (tx_ui, rx_ui) = unbounded::<UiCmd>();
 
@@ -112,6 +108,7 @@ fn main() -> Result<()> {
         saved_baseline,
         toast: None,
         show_reset_confirm: false,
+        update_prompt: None,
         show_live_aircraft_data: app_settings.show_live_aircraft_data,
         effects,
 
@@ -140,6 +137,8 @@ fn main() -> Result<()> {
     };
 
     let tx_ui_for_tray = tx_ui.clone();
+
+    ursa_minor_ffb::updater::spawn_startup_check(tx_ui.clone(), env!("CARGO_PKG_VERSION"));
 
     let run = eframe::run_native(
         "Ursa Minor FFB",

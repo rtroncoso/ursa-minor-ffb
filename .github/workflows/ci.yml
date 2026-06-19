@@ -44,5 +44,8 @@ jobs:
       - name: Build app
         run: cargo build --features app --locked
 
+      - name: Build updater
+        run: cargo build --bin ursa-minor-updater --features updater --locked
+
       - name: Test
         run: cargo test --features app --locked

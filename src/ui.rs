@@ -12,10 +12,8 @@ use std::{
     time::{Duration, Instant},
 };
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-
 use crate::{
     preset::{Preset, PresetKind, PresetShared, PresetStore},
     tray, updater, EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus, UiCmd,
@@ -142,6 +140,7 @@ pub struct UiState {
     pub saved_baseline: Preset,
     pub toast: Option<Toast>,
     pub show_reset_confirm: bool,
+    pub update_prompt: Option<updater::ReleaseInfo>,
     pub show_live_aircraft_data: bool,
     pub effects: EffectsShared,
 
@@ -290,8 +289,14 @@ impl UiState {
     }
 
     fn open_presets_folder(&self) {
-        let dir = self.preset_store.dir();
-        let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
+        Self::open_path_in_shell(self.preset_store.dir());
+    }
+
+    fn open_url(url: &str) {
+        let wide: Vec<u16> = std::ffi::OsStr::new(url)
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
         unsafe {
             let _ = ShellExecuteW(
                 None,
@@ -301,6 +306,46 @@ impl UiState {
                 PCWSTR::null(),
                 SW_SHOWNORMAL,
             );
+        }
+    }
+
+    fn open_path_in_shell(path: &std::path::Path) {
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        unsafe {
+            let _ = ShellExecuteW(
+                None,
+                windows::core::w!("open"),
+                PCWSTR(wide.as_ptr()),
+                PCWSTR::null(),
+                PCWSTR::null(),
+                SW_SHOWNORMAL,
+            );
+        }
+    }
+
+    fn start_update(&mut self, ctx: &egui::Context, release: &updater::ReleaseInfo) {
+        let app_dir = match std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+            Some(d) => d,
+            None => {
+                self.show_toast("Could not determine application directory.", true);
+                return;
+            }
+        };
+        let pid = std::process::id();
+        let release = release.clone();
+
+        let _ = self.tx_hid.send(HidCmd::SendIntensity(0));
+        self.hold.store(true, Ordering::Relaxed);
+        let _ = self.tx_hid.send(HidCmd::SetHold(true));
+
+        match updater::launch_updater(&app_dir, pid, &release) {
+            Ok(()) => {
+                self.update_prompt = None;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Err(e) => {
+                self.show_toast(format!("Update failed to start: {e:#}"), true);
+            }
         }
     }
 
@@ -414,10 +459,6 @@ impl eframe::App for UiState {
 
                 ui.separator();
 
-                if ui.button("🔄 Check for updates").clicked() {
-                    updater::spawn_check(HWND(0), env!("CARGO_PKG_VERSION"));
-                }
-
                 let holding = self.hold.load(Ordering::Relaxed);
                 if !holding {
                     if ui.button("⛔ Stop").clicked() {
@@ -506,6 +547,32 @@ impl eframe::App for UiState {
                                 if ui.button("Reset").clicked() {
                                     self.confirm_reset_preset();
                                     self.show_reset_confirm = false;
+                                }
+                            });
+                        });
+                }
+
+                if let Some(release) = self.update_prompt.clone() {
+                    let current = env!("CARGO_PKG_VERSION");
+                    let latest = release.tag.trim_start_matches('v');
+                    egui::Window::new("Update available")
+                        .collapsible(false)
+                        .resizable(false)
+                        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                        .show(ctx, |ui| {
+                            ui.label(format!("A new version of Ursa Minor FFB is available."));
+                            ui.label(format!("Current: {current}"));
+                            ui.label(format!("Latest:  {latest}"));
+                            ui.add_space(6.0);
+                            if ui.link("View release notes").clicked() {
+                                Self::open_url(&release.html_url);
+                            }
+                            ui.horizontal(|ui| {
+                                if ui.button("Not now").clicked() {
+                                    self.update_prompt = None;
+                                }
+                                if ui.button("Update now").clicked() {
+                                    self.start_update(ctx, &release);
                                 }
                             });
                         });
@@ -799,6 +866,10 @@ impl eframe::App for UiState {
                     }
                     UiCmd::Quit => {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    UiCmd::UpdateAvailable(info) => {
+                        self.update_prompt = Some(info);
+                        ctx.request_repaint();
                     }
                 },
                 Err(TryRecvError::Empty) => break,

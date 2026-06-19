@@ -9,7 +9,7 @@ pub mod types;
 pub mod tray;
 #[cfg(all(windows, feature = "app"))]
 pub mod ui;
-#[cfg(all(windows, feature = "app"))]
+#[cfg(all(windows, any(feature = "app", feature = "updater")))]
 pub mod updater;
 
 pub use log::LogBuffer;

@@ -194,7 +194,7 @@ impl EffectsState {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum UiCmd {
     Show,
     Hide,
@@ -202,6 +202,8 @@ pub enum UiCmd {
     Stop,
     Resume,
     Quit,
+    #[cfg(all(windows, feature = "app"))]
+    UpdateAvailable(crate::updater::ReleaseInfo),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]

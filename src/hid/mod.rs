@@ -2,14 +2,14 @@ pub mod protocol;
 
 #[cfg(windows)]
 mod win32;
-#[cfg(windows)]
+#[cfg(all(windows, feature = "app"))]
 mod worker;
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "app"))]
 pub use worker::hid_worker;
 
-#[cfg(not(windows))]
+#[cfg(any(not(windows), not(feature = "app")))]
 mod stub;
 
-#[cfg(not(windows))]
+#[cfg(any(not(windows), not(feature = "app")))]
 pub use stub::hid_worker;

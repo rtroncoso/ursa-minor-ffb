@@ -13,7 +13,6 @@ jobs:
     runs-on: windows-latest
 
     env:
-      # Human-readable app name you show in the UI
       BIN_NAME: Ursa Minor FFB
 
     steps:
@@ -28,10 +27,13 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Build (release)
+      - name: Build app (release)
         run: cargo build --release --features app --locked
 
-      - name: Prepare bundle (zip + checksums)
+      - name: Build updater (release)
+        run: cargo build --release --bin ursa-minor-updater --features updater --locked
+
+      - name: Stage MSI inputs and portable zip
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -39,11 +41,9 @@ jobs:
           $tag = "${{ github.ref_name }}"
           $repo = "${{ github.event.repository.name }}"
           $dist = "dist"
-          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          $stage = Join-Path $dist "msi-staging"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
-          # Try to locate the exe produced by cargo:
-          #   - dashed (cargo default from package name) e.g. "ursa-minor-ffb.exe"
-          #   - exact BIN_NAME (if you defined [[bin]] name with spaces)
           $binDashed = ($env:BIN_NAME -replace '[^\w\-]', '-').ToLower()
           $candidates = @(
             "target\release\$binDashed.exe",
@@ -56,33 +56,74 @@ jobs:
             if (Test-Path $c) { $exePath = (Resolve-Path $c).Path; break }
           }
           if (-not $exePath) {
-            $exe = Get-ChildItem "target\release\*.exe" | Select-Object -First 1
+            $exe = Get-ChildItem "target\release\ursa-minor-ffb.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($exe) { $exePath = $exe.FullName }
           }
           if (-not $exePath) {
-            Write-Error "Could not find built .exe in target\release"
+            Write-Error "Could not find built app .exe in target\release"
+          }
+
+          $updaterPath = "target\release\ursa-minor-updater.exe"
+          if (-not (Test-Path $updaterPath)) {
+            Write-Error "Could not find built updater at $updaterPath"
           }
 
           Write-Host "Found EXE: $exePath"
+          Write-Host "Found updater: $updaterPath"
 
-          # Zip name: <repo>-<tag>-windows-x64.zip (e.g. ursa-minor-ffb-v1.2.3-windows-x64.zip)
+          Copy-Item $exePath (Join-Path $stage "$($env:BIN_NAME).exe") -Force
+          Copy-Item "lib\SimConnect.dll" (Join-Path $stage "SimConnect.dll") -Force
+          Copy-Item $updaterPath (Join-Path $stage "ursa-minor-updater.exe") -Force
+
           $zipName = "$repo-$tag-windows-x64.zip"
           $zipPath = Join-Path $dist $zipName
-
-          # Create a minimal bundle: just the EXE (rename inside zip to the nice BIN_NAME)
           $tmpDir = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP "bundle") | Select-Object -ExpandProperty FullName
           Copy-Item $exePath (Join-Path $tmpDir "$($env:BIN_NAME).exe")
-
           Compress-Archive -Path (Join-Path $tmpDir "*") -DestinationPath $zipPath -Force
 
-          # Generate SHA256SUMS.txt for the zip
-          $hash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLower()
-          $sumLine = "$hash  $zipName"
-          $sumFile = Join-Path $dist "SHA256SUMS.txt"
-          Set-Content -Path $sumFile -Value $sumLine -NoNewline
+          Write-Host "Created portable zip: $zipPath"
 
-          Write-Host "Created: $zipPath"
-          Write-Host "Checksums: $sumFile"
+      - id: product_version
+        name: Product version (no v prefix)
+        shell: bash
+        run: echo "ver=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build MSI
+        uses: caphyon/advinst-github-action@main
+        with:
+          advinst-version: "23.7"
+          advinst-license: ${{ secrets.ADVINST_LICENSE_KEY }}
+          advinst-enable-automation: "true"
+          aip-path: "${{ github.workspace }}\\installer\\Ursa Minor FFB.aip"
+          aip-build-name: DefaultBuild
+          aip-package-name: UrsaMinorFFB-${{ github.ref_name }}-x64.msi
+          aip-output-dir: ${{ github.workspace }}\dist
+          aip-commands: |
+            SetVersion ${{ steps.product_version.outputs.ver }}
+
+      - name: Generate SHA256SUMS.txt
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = "${{ github.ref_name }}"
+          $repo = "${{ github.event.repository.name }}"
+          $zipName = "$repo-$tag-windows-x64.zip"
+          $msiName = "UrsaMinorFFB-$tag-x64.msi"
+          $dist = "dist"
+
+          $lines = @()
+          foreach ($name in @($zipName, $msiName)) {
+            $path = Join-Path $dist $name
+            if (-not (Test-Path $path)) {
+              Write-Error "Missing release artifact: $path"
+            }
+            $hash = (Get-FileHash -Path $path -Algorithm SHA256).Hash.ToLower()
+            $lines += "$hash  $name"
+          }
+
+          $sumFile = Join-Path $dist "SHA256SUMS.txt"
+          Set-Content -Path $sumFile -Value ($lines -join "`n") -NoNewline
+          Get-Content $sumFile
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -90,6 +131,7 @@ jobs:
           name: windows-x64
           path: |
             dist/*.zip
+            dist/*.msi
             dist/SHA256SUMS.txt
           if-no-files-found: error
 
@@ -105,22 +147,21 @@ jobs:
           name: windows-x64
           path: dist
 
-      # 1) Create or update a DRAFT release and upload assets
       - name: Create Draft Release & Upload Assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           body: "Automated release for ${{ github.ref_name }}"
-          draft: true                 # <-- important: draft first
+          draft: true
           prerelease: false
           generate_release_notes: false
           fail_on_unmatched_files: true
           files: |
             dist/*.zip
+            dist/*.msi
             dist/SHA256SUMS.txt
 
-      # 2) Publish the draft so it becomes visible/latest
       - name: Publish Draft Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -128,6 +169,5 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          # Ensure the draft exists, then publish it
           gh release view "$TAG" --repo "$REPO" >/dev/null
           gh release edit "$TAG" --repo "$REPO" --draft=false --latest
