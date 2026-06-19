@@ -32,8 +32,9 @@ fn commercial_yaml_roundtrip_matches_built_in_default() {
     let yaml = serde_yaml::to_string(&preset).unwrap();
     let parsed: ursa_minor_ffb::Preset = serde_yaml::from_str(&yaml).unwrap();
     assert_eq!(parsed.rumble, preset.rumble);
-    assert_eq!(parsed.simvars.extra.len(), 8);
+    assert_eq!(parsed.simvars.extra.len(), 13);
     assert_eq!(parsed.simvars.extra[0].key, "spoilers_pct");
+    assert_eq!(parsed.simvars.extra[1].key, "wind_kt");
 }
 
 #[test]
@@ -42,7 +43,7 @@ fn commercial_layout_parses_spoilers_extra() {
     let layout = preset.layout();
     let mut elems = vec![0.0; layout.total_count()];
     elems[0] = 120.0;
-    elems[13] = 80.0;
+    elems[12] = 80.0;
 
     let fv = parse_main_elems(&elems, &layout, false, preset.rumble.ias_deadband_kn);
     assert_eq!(fv.extras.get("spoilers_pct"), Some(&80.0));
@@ -68,7 +69,7 @@ fn preset_store_save_and_load_custom() {
 }
 
 #[test]
-fn core_only_layout_matches_legacy_eleven_fields() {
+fn core_only_layout_has_twelve_fields() {
     let layout = SimVarLayout::core_only();
-    assert_eq!(layout.total_count(), 13);
+    assert_eq!(layout.total_count(), 12);
 }

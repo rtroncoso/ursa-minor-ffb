@@ -17,6 +17,7 @@ pub struct FlightVars {
     pub ground_speed_kt: f64,
     pub wind_kt: f64,
     pub wind_dir_deg: f64,
+    pub vertical_speed_fpm: f64,
     pub paused: bool,
     /// Highest `GENERAL ENG RPM:N` among subscribed extras (twin/turboprop uses max engine).
     pub eng_rpm: f64,
@@ -44,8 +45,8 @@ pub struct RumbleConfig {
     pub flaps_bump_duration_s: f64,
     pub flaps_bump_eps_pct: f64,
     pub gear_bump_duration_s: f64,
-    #[serde(default = "default_ground_spoilers")]
-    pub ground_spoilers: f32,
+    #[serde(default = "default_spoilers", alias = "ground_spoilers")]
+    pub spoilers: f32,
     #[serde(default = "default_engine_vibe")]
     pub engine_vibe: f32,
     #[serde(default = "default_engine_idle_n1_pct")]
@@ -69,14 +70,14 @@ fn default_eng_rpm_startup_max() -> f32 {
 }
 
 fn default_eng_rpm_idle() -> f32 {
-    5500.0
+    2500.0
 }
 
 fn default_eng_rpm_max() -> f32 {
-    11000.0
+    5200.0
 }
 
-fn default_ground_spoilers() -> f32 {
+fn default_spoilers() -> f32 {
     40.0
 }
 
@@ -108,7 +109,7 @@ impl Default for RumbleConfig {
             flaps_bump_duration_s: 1.0,
             flaps_bump_eps_pct: 2.0,
             gear_bump_duration_s: 0.8,
-            ground_spoilers: default_ground_spoilers(),
+            spoilers: default_spoilers(),
             engine_vibe: default_engine_vibe(),
             engine_idle_n1_pct: default_engine_idle_n1_pct(),
             eng_rpm_spool_min: default_eng_rpm_spool_min(),

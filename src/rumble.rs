@@ -251,9 +251,8 @@ impl RumbleEngine {
 
         if motion_effects_enabled {
             let spoilers_pct = fv.extras.get("spoilers_pct").copied().unwrap_or(0.0) / 100.0;
-            let spoiler_boost_allowed = spoiler_boost_allowed(s, fv, spoilers_pct);
-            if spoiler_boost_allowed && spoilers_pct > 0.01 {
-                let boost = 1.0 + spoilers_pct * (cfg.ground_spoilers as f64 / 100.0);
+            if spoiler_boost_allowed(s, fv, spoilers_pct) {
+                let boost = spoiler_boost_multiplier(fv, cfg, spoilers_pct);
                 total *= boost;
                 effects.spoilers_boost_active = true;
             }
@@ -322,6 +321,17 @@ fn spoiler_boost_allowed(s: &RumbleState, fv: &FlightVars, spoilers_pct: f64) ->
         return true;
     }
     landing_rollout_active(s, fv) || rejected_takeoff_active(s, fv, spoilers_pct)
+}
+
+fn spoiler_boost_multiplier(fv: &FlightVars, cfg: &RumbleConfig, spoilers_pct: f64) -> f64 {
+    let scale = cfg.spoilers as f64 / 100.0;
+    let mut boost = 1.0 + spoilers_pct * scale * 0.45;
+    // Steep descent with spoilers deployed (air brakes).
+    if !fv.on_ground && spoilers_pct > 0.05 && fv.vertical_speed_fpm < -700.0 {
+        let descent = (-fv.vertical_speed_fpm / 3000.0).clamp(0.0, 1.0);
+        boost *= 1.0 + descent * spoilers_pct * 0.2;
+    }
+    boost.min(1.55)
 }
 
 fn landing_rollout_active(s: &RumbleState, fv: &FlightVars) -> bool {
@@ -828,11 +838,13 @@ mod tests {
         let mut engine = RumbleEngine::new();
         let mut fv = airborne(150.0, 1.0);
         fv.extras.insert("spoilers_pct".to_string(), 100.0);
-        let without = engine.step(&fv, &cfg(), 1, false).intensity;
+        let mut c_off = cfg();
+        c_off.spoilers = 0.0;
+        let without = engine.step(&fv, &c_off, 1, false).intensity;
 
         let mut engine2 = RumbleEngine::new();
         let mut c = cfg();
-        c.ground_spoilers = 50.0;
+        c.spoilers = 50.0;
         let with = engine2.step(&fv, &c, 1, false).intensity;
         assert!(with > without);
         assert!(engine2.step(&fv, &c, 1, false).effects.spoilers_boost_active);
@@ -1066,6 +1078,38 @@ mod tests {
         );
         let (_, saw_dot) = max_engine_output_over_window(&mut engine, &with_rpm, &c, 1);
         assert!(saw_dot, "eng_rpm must activate engine dot");
+    }
+
+    #[test]
+    fn spoilers_steep_descent_boosts_more_than_level_flight() {
+        let mut c = cfg();
+        c.spoilers = 50.0;
+
+        let mut level = FlightVars {
+            on_ground: false,
+            airspeed_indicated: 150.0,
+            vertical_speed_fpm: -100.0,
+            sim_time_s: 1.0,
+            ..Default::default()
+        };
+        level.extras.insert("spoilers_pct".to_string(), 80.0);
+
+        let mut steep = level.clone();
+        steep.vertical_speed_fpm = -2000.0;
+
+        let mut engine_l = RumbleEngine::new();
+        let out_l = engine_l.step(&level, &c, 1, false);
+        let mut engine_s = RumbleEngine::new();
+        let out_s = engine_s.step(&steep, &c, 1, false);
+
+        assert!(out_l.effects.spoilers_boost_active);
+        assert!(out_s.effects.spoilers_boost_active);
+        assert!(
+            out_s.intensity > out_l.intensity,
+            "steep descent={} level={}",
+            out_s.intensity,
+            out_l.intensity
+        );
     }
 
     #[test]

@@ -64,6 +64,7 @@ impl PresetKind {
                 rumble.gear_peak = 75.0;
                 rumble.stall_ceiling = 130.0;
                 rumble.bank = 55.0;
+                rumble.spoilers = 25.0;
                 rumble.engine_vibe = 10.0;
                 rumble.eng_rpm_spool_min = 0.0;
                 rumble.eng_rpm_startup_max = 800.0;
@@ -83,13 +84,13 @@ impl PresetKind {
                 rumble.gear_peak = 120.0;
                 rumble.stall_ceiling = 160.0;
                 rumble.bank = 45.0;
-                rumble.ground_spoilers = 40.0;
+                rumble.spoilers = 28.0;
                 rumble.engine_vibe = 14.0;
                 rumble.engine_idle_n1_pct = 22.0;
                 rumble.eng_rpm_spool_min = 800.0;
                 rumble.eng_rpm_startup_max = 900.0;
-                rumble.eng_rpm_idle = 5500.0;
-                rumble.eng_rpm_max = 11000.0;
+                rumble.eng_rpm_idle = 2500.0;
+                rumble.eng_rpm_max = 5200.0;
                 rumble.smoothing_alpha = 0.18;
                 rumble.taxi_start_kn = 5.0;
                 rumble.taxi_end_kn = 18.0;
@@ -104,12 +105,13 @@ impl PresetKind {
                 rumble.gear_peak = 100.0;
                 rumble.stall_ceiling = 210.0;
                 rumble.bank = 115.0;
+                rumble.spoilers = 35.0;
                 rumble.engine_vibe = 12.0;
                 rumble.engine_idle_n1_pct = 58.0;
                 rumble.eng_rpm_spool_min = 600.0;
                 rumble.eng_rpm_startup_max = 900.0;
-                rumble.eng_rpm_idle = 4500.0;
-                rumble.eng_rpm_max = 13000.0;
+                rumble.eng_rpm_idle = 2800.0;
+                rumble.eng_rpm_max = 7500.0;
                 rumble.smoothing_alpha = 0.12;
                 rumble.taxi_start_kn = 4.0;
                 rumble.taxi_end_kn = 12.0;
@@ -220,8 +222,7 @@ pub enum LayoutField {
     SimTime,
     GroundSpeed,
     Paused,
-    WindKt,
-    WindDirDeg,
+    VerticalSpeed,
     Extra(String),
 }
 
@@ -243,8 +244,7 @@ fn core_layout_fields() -> [LayoutField; CORE_SIMVAR_COUNT] {
         LayoutField::SimTime,
         LayoutField::GroundSpeed,
         LayoutField::Paused,
-        LayoutField::WindKt,
-        LayoutField::WindDirDeg,
+        LayoutField::VerticalSpeed,
     ]
 }
 
@@ -519,9 +519,9 @@ mod tests {
         let com = PresetKind::Commercial.built_in_default();
         let ftr = PresetKind::Fighter.built_in_default();
         assert_ne!(ga.rumble.base_airspeed, ftr.rumble.base_airspeed);
-        assert_eq!(com.simvars.extra.len(), 8);
-        assert_eq!(ga.simvars.extra.len(), 5);
-        assert_eq!(ftr.simvars.extra.len(), 5);
+        assert_eq!(com.simvars.extra.len(), 13);
+        assert_eq!(ga.simvars.extra.len(), 11);
+        assert_eq!(ftr.simvars.extra.len(), 9);
     }
 
     #[test]
@@ -549,7 +549,7 @@ mod tests {
         store.save(&old).unwrap();
 
         let loaded = store.load(PresetKind::Commercial);
-        assert_eq!(loaded.simvars.extra.len(), 8);
+        assert_eq!(loaded.simvars.extra.len(), 13);
         assert!(loaded.simvars.extra.iter().any(|d| d.key == "eng_rpm_1"));
         let throttle = loaded
             .simvars

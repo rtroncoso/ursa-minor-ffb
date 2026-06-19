@@ -412,8 +412,8 @@ impl eframe::App for UiState {
                     );
                     UiState::effect_row(
                         ui,
-                        "Ground Spoilers",
-                        &mut cfg.ground_spoilers,
+                        "Spoilers",
+                        &mut cfg.spoilers,
                         0.0..=100.0,
                         self.effects.spoilers_boost_active.load(Ordering::Relaxed),
                         &mut _changed,
@@ -455,6 +455,11 @@ impl eframe::App for UiState {
                         UiState::kv_line(ui, "Bank (°)", format!("{:.1}", v.bank_deg));
                         UiState::kv_line(ui, "Wind (kt)", format!("{:.1}", v.wind_kt));
                         UiState::kv_line(ui, "Wind from (°)", format!("{:.0}", v.wind_dir_deg));
+                        UiState::kv_line(
+                            ui,
+                            "VS (fpm)",
+                            format!("{:.0}", v.vertical_speed_fpm),
+                        );
                         UiState::kv_line(ui, "Eng RPM", format!("{:.0}", v.eng_rpm));
                         if v.num_engines > 0 {
                             UiState::kv_line(ui, "Engines", v.num_engines.to_string());

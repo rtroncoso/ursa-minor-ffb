@@ -15,7 +15,7 @@ fn ga_rumble() -> RumbleConfig {
     PresetKind::GeneralAviation.built_in_default().rumble
 }
 
-fn parked_core_elems(paused_simvar: f64) -> [f64; 13] {
+fn parked_core_elems(paused_simvar: f64) -> [f64; 12] {
     [
         0.0,  // IAS
         1.0,  // on ground
@@ -28,8 +28,7 @@ fn parked_core_elems(paused_simvar: f64) -> [f64; 13] {
         10.0, // sim time
         0.0,  // GS
         paused_simvar,
-        0.0,  // wind kt
-        0.0,  // wind dir
+        0.0,  // vertical speed
     ]
 }
 

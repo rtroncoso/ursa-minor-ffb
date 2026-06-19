@@ -27,6 +27,7 @@ pub fn parse_main_elems(
         ground_speed_kt: 0.0,
         wind_kt: 0.0,
         wind_dir_deg: 0.0,
+        vertical_speed_fpm: 0.0,
         paused: false,
         eng_rpm: 0.0,
         num_engines: 0,
@@ -48,8 +49,7 @@ pub fn parse_main_elems(
             LayoutField::SimTime => fv.sim_time_s = v,
             LayoutField::GroundSpeed => fv.ground_speed_kt = v.max(0.0),
             LayoutField::Paused => paused_from_var = v != 0.0,
-            LayoutField::WindKt => fv.wind_kt = v,
-            LayoutField::WindDirDeg => fv.wind_dir_deg = v,
+            LayoutField::VerticalSpeed => fv.vertical_speed_fpm = v,
             LayoutField::Extra(key) => {
                 if v.is_finite() {
                     fv.extras.insert(key.clone(), v);
@@ -83,18 +83,33 @@ pub fn parse_main_elems(
     fv
 }
 
-/// Recompute pause after core + extras are merged (eng_rpm must be current).
+/// Recompute pause after core + extras are merged (eng_rpm / wind must be current).
 pub fn finalize_flight_vars(fv: &mut FlightVars) {
     sync_aircraft_meta(fv);
+    sanitize_wind_fields(fv);
     fv.paused = effective_paused(fv.paused, fv);
 }
 
-/// Sync engine RPM (max of indexed engines) and engine count from extras.
+/// Sync engine RPM (max of indexed engines), wind, and engine count from extras.
 pub fn sync_aircraft_meta(fv: &mut FlightVars) {
     sync_eng_rpm(fv);
+    sync_wind_from_extras(fv);
     if let Some(n) = fv.extras.get("num_engines").copied() {
         if n.is_finite() && n >= 0.0 {
             fv.num_engines = n.round().max(0.0) as u32;
+        }
+    }
+}
+
+fn sync_wind_from_extras(fv: &mut FlightVars) {
+    if let Some(&kt) = fv.extras.get("wind_kt") {
+        if kt.is_finite() && kt >= 0.0 {
+            fv.wind_kt = kt;
+        }
+    }
+    if let Some(&dir) = fv.extras.get("wind_dir_deg") {
+        if dir.is_finite() {
+            fv.wind_dir_deg = dir;
         }
     }
 }
@@ -118,43 +133,40 @@ pub fn merge_extras(fv: &mut FlightVars, extras: &HashMap<String, f64>) {
         }
     }
     sync_aircraft_meta(fv);
+    sanitize_wind_fields(fv);
 }
 
-/// Highest subscribed `eng_rpm_N` value drives engine rumble (aircraft-agnostic twins).
+/// Physical RPM from sim: `MAX RATED ENGINE RPM × GENERAL ENG PCT MAX RPM / 100`,
+/// falling back to `GENERAL ENG RPM` when it is in a sane range (piston / turboprop).
 pub fn sync_eng_rpm(fv: &mut FlightVars) {
-    let mut max_rpm = 0.0_f64;
-    for (key, &val) in &fv.extras {
-        if key.starts_with("eng_rpm_") && val.is_finite() && val >= 0.0 {
-            max_rpm = max_rpm.max(val);
+    let mut best = 0.0_f64;
+    for idx in 1..=2u32 {
+        if let Some(rpm) = engine_rpm_from_index(&fv.extras, idx) {
+            best = best.max(rpm);
         }
     }
-    if max_rpm > 0.0 {
-        fv.eng_rpm = max_rpm;
-    } else if let Some(rpm) = fv
-        .extras
-        .get("eng_rpm_1")
-        .copied()
-        .filter(|v| v.is_finite() && *v >= 0.0)
-    {
-        fv.eng_rpm = rpm;
+    if best > 0.0 {
+        fv.eng_rpm = best;
     }
 }
 
-/// Normalized engine power 0 (idle) .. 1 (max). Prefers sim `GENERAL ENG PCT MAX RPM` when present.
-pub fn engine_power_norm(fv: &FlightVars, cfg: &RumbleConfig) -> f64 {
-    if let Some(pct) = fv
-        .extras
-        .get("eng_pct_max_rpm_1")
-        .copied()
-        .filter(|v| v.is_finite())
-    {
-        let idle_pct =
-            ((cfg.eng_rpm_idle / cfg.eng_rpm_max.max(1.0)) * 100.0).clamp(5.0, 95.0) as f64;
-        if pct <= idle_pct {
-            return 0.0;
+fn engine_rpm_from_index(extras: &HashMap<String, f64>, index: u32) -> Option<f64> {
+    let rated_key = format!("eng_max_rated_rpm_{index}");
+    let pct_key = format!("eng_pct_max_rpm_{index}");
+    let raw_key = format!("eng_rpm_{index}");
+
+    if let (Some(&rated), Some(&pct)) = (extras.get(&rated_key), extras.get(&pct_key)) {
+        if rated > 100.0 && pct.is_finite() && pct >= 0.0 {
+            return Some(rated * pct / 100.0);
         }
-        return ((pct - idle_pct) / (100.0 - idle_pct)).clamp(0.0, 1.0);
     }
+    extras.get(&raw_key).copied().filter(|&raw| {
+        raw.is_finite() && (40.0..=12_000.0).contains(&raw)
+    })
+}
+
+/// Normalized engine power 0 (idle) .. 1 (max), from resolved physical RPM.
+pub fn engine_power_norm(fv: &FlightVars, cfg: &RumbleConfig) -> f64 {
     rpm_thrust_norm(fv.eng_rpm, cfg)
 }
 
@@ -200,10 +212,14 @@ pub fn sanitize_flight_vars(fv: &mut FlightVars, ias_deadband_kn: f64) {
     if !fv.bank_deg.is_finite() {
         fv.bank_deg = 0.0;
     }
+    sanitize_wind_fields(fv);
+}
+
+fn sanitize_wind_fields(fv: &mut FlightVars) {
     if !fv.wind_kt.is_finite() || fv.wind_kt < 0.0 {
         fv.wind_kt = 0.0;
-    } else if fv.wind_kt > 150.0 {
-        fv.wind_kt = 150.0;
+    } else if fv.wind_kt > 80.0 {
+        fv.wind_kt = 80.0;
     }
     if !fv.wind_dir_deg.is_finite() {
         fv.wind_dir_deg = 0.0;
@@ -225,7 +241,7 @@ mod tests {
     use super::*;
     use crate::preset::SimVarLayout;
 
-    fn sample_elems() -> [f64; 13] {
+    fn sample_elems() -> [f64; 12] {
         [
             120.0, // IAS
             0.0,   // on ground
@@ -238,9 +254,22 @@ mod tests {
             100.0, // sim time
             25.0,  // ground speed
             0.0,   // paused var
-            18.0,  // wind velocity (kt)
-            270.0, // wind direction (deg)
+            -200.0, // vertical speed (fpm)
         ]
+    }
+
+    fn wind_extras(kt: f64, dir: f64) -> HashMap<String, f64> {
+        let mut m = HashMap::new();
+        m.insert("wind_kt".to_string(), kt);
+        m.insert("wind_dir_deg".to_string(), dir);
+        m
+    }
+
+    fn parse_with_wind(elems: &[f64], kt: f64, dir: f64) -> FlightVars {
+        let layout = SimVarLayout::core_only();
+        let mut fv = parse_main_elems(elems, &layout, false, 1.0);
+        merge_extras(&mut fv, &wind_extras(kt, dir));
+        fv
     }
 
     #[test]
@@ -256,9 +285,12 @@ mod tests {
         assert!(!fv.stalled);
         assert_eq!(fv.sim_time_s, 100.0);
         assert_eq!(fv.ground_speed_kt, 25.0);
-        assert!((fv.wind_kt - 18.0).abs() < 0.1);
-        assert!((fv.wind_dir_deg - 270.0).abs() < 0.1);
+        assert!((fv.vertical_speed_fpm - (-200.0)).abs() < 0.1);
         assert!(!fv.paused);
+
+        let fv_wind = parse_with_wind(&sample_elems(), 18.0, 270.0);
+        assert!((fv_wind.wind_kt - 18.0).abs() < 0.1);
+        assert!((fv_wind.wind_dir_deg - 270.0).abs() < 0.1);
     }
 
     #[test]
@@ -348,29 +380,24 @@ mod tests {
 
     #[test]
     fn non_finite_wind_becomes_zero() {
+        let mut extras = HashMap::new();
+        extras.insert("wind_kt".to_string(), f64::NAN);
+        extras.insert("wind_dir_deg".to_string(), 270.0);
         let layout = SimVarLayout::core_only();
-        let mut e = sample_elems();
-        e[11] = f64::NAN;
-        let fv = parse_main_elems(&e, &layout, false, 1.0);
+        let mut fv = parse_main_elems(&sample_elems(), &layout, false, 1.0);
+        merge_extras(&mut fv, &extras);
         assert_eq!(fv.wind_kt, 0.0);
     }
 
     #[test]
     fn wind_clamped_to_sanity_max() {
-        let layout = SimVarLayout::core_only();
-        let mut e = sample_elems();
-        e[11] = 160.0;
-        let fv = parse_main_elems(&e, &layout, false, 1.0);
-        assert_eq!(fv.wind_kt, 150.0);
+        let fv = parse_with_wind(&sample_elems(), 160.0, 90.0);
+        assert_eq!(fv.wind_kt, 80.0);
     }
 
     #[test]
     fn wind_speed_and_direction_are_independent() {
-        let layout = SimVarLayout::core_only();
-        let mut e = sample_elems();
-        e[11] = 12.0;
-        e[12] = 90.0;
-        let fv = parse_main_elems(&e, &layout, false, 1.0);
+        let fv = parse_with_wind(&sample_elems(), 12.0, 90.0);
         assert_eq!(fv.wind_kt, 12.0);
         assert_eq!(fv.wind_dir_deg, 90.0);
     }
@@ -426,14 +453,12 @@ mod tests {
     #[test]
     fn skips_unregistered_core_fields_without_shifting_extras() {
         let mut layout = SimVarLayout::core_only();
-        layout.fields.pop(); // wind direction not registered
-        layout.fields.pop(); // wind velocity not registered
+        layout.fields.pop(); // vertical speed not registered
         layout
             .fields
             .push(LayoutField::Extra("eng_rpm_1".to_string()));
 
         let mut e = sample_elems().to_vec();
-        e.pop();
         e.pop();
         e.push(2400.0);
 
@@ -444,25 +469,37 @@ mod tests {
     }
 
     #[test]
-    fn sync_eng_rpm_uses_max_of_indexed_engines() {
+    fn sync_eng_rpm_uses_max_rated_times_pct() {
         let mut fv = FlightVars::default();
-        fv.extras.insert("eng_rpm_1".to_string(), 1000.0);
-        fv.extras.insert("eng_rpm_2".to_string(), 2200.0);
+        fv.extras.insert("eng_max_rated_rpm_1".to_string(), 5200.0);
+        fv.extras.insert("eng_pct_max_rpm_1".to_string(), 104.0);
+        fv.extras.insert("eng_rpm_1".to_string(), 28_000.0);
         sync_aircraft_meta(&mut fv);
-        assert_eq!(fv.eng_rpm, 2200.0);
+        assert!((fv.eng_rpm - 5408.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn sync_eng_rpm_uses_max_of_twin_engines() {
+        let mut fv = FlightVars::default();
+        fv.extras.insert("eng_max_rated_rpm_1".to_string(), 5200.0);
+        fv.extras.insert("eng_pct_max_rpm_1".to_string(), 60.0);
+        fv.extras.insert("eng_max_rated_rpm_2".to_string(), 5200.0);
+        fv.extras.insert("eng_pct_max_rpm_2".to_string(), 95.0);
+        sync_aircraft_meta(&mut fv);
+        assert!((fv.eng_rpm - 4940.0).abs() < 1.0);
     }
 
     #[test]
     fn engine_power_norm_prefers_pct_max_rpm() {
         let mut fv = FlightVars::default();
-        fv.extras.insert("eng_pct_max_rpm_1".to_string(), 75.0);
+        fv.eng_rpm = 4000.0;
         let cfg = RumbleConfig {
-            eng_rpm_idle: 1000.0,
-            eng_rpm_max: 2500.0,
+            eng_rpm_idle: 2500.0,
+            eng_rpm_max: 5200.0,
             ..RumbleConfig::default()
         };
         let norm = engine_power_norm(&fv, &cfg);
-        assert!(norm > 0.4 && norm < 0.9, "got {norm}");
+        assert!(norm > 0.5 && norm < 0.7, "got {norm}");
     }
 
     #[test]

@@ -1,34 +1,34 @@
-/// Scripted SimConnect main-data timeline for integration tests.
-pub fn scripted_flight_timeline() -> Vec<([f64; 13], bool)> {
+// Scripted SimConnect main-data timeline for integration tests.
+pub fn scripted_flight_timeline() -> Vec<([f64; 12], bool)> {
     vec![
         (
-            [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             false,
         ),
         (
-            [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.05, 5.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.05, 5.0, 0.0, 0.0],
             false,
         ),
         (
-            [120.0, 0.0, 5.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 8.0, 0.0],
+            [120.0, 0.0, 5.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
             false,
         ),
         (
-            [150.0, 0.0, 0.0, 50.0, 50.0, 2.0, 0.0, 0.0, 2.0, 0.0, 0.0, 10.0, 0.0],
+            [150.0, 0.0, 0.0, 50.0, 50.0, 2.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0],
             false,
         ),
         (
-            [70.0, 0.0, 25.0, 0.0, 0.0, 0.0, 0.0, 1.0, 3.0, 0.0, 0.0, 15.0, 0.0],
+            [70.0, 0.0, 25.0, 0.0, 0.0, 0.0, 0.0, 1.0, 3.0, 0.0, 0.0, 0.0],
             false,
         ),
         (
-            [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 3.1, 0.0, 1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 3.1, 0.0, 1.0, 0.0],
             false,
         ),
     ]
 }
 
-/// Recording HID backend stub for future worker-level tests.
+// Recording HID backend stub for future worker-level tests.
 #[derive(Default)]
 pub struct RecordingHid {
     pub frames: Vec<(String, Vec<u8>)>,
