@@ -46,12 +46,6 @@ fn main() -> Result<()> {
     let saved_baseline = initial_preset.clone();
     let config = Arc::new(PresetShared::new(initial_preset));
 
-    let initial_height = if app_settings.show_live_aircraft_data {
-        ursa_minor_ffb::ui::WINDOW_HEIGHT_EXPANDED
-    } else {
-        ursa_minor_ffb::ui::WINDOW_HEIGHT_COLLAPSED
-    };
-
     match logs.try_init_file_prefer_exe_dir() {
         Ok(p) => logs.push(format!("File logging enabled → {}", p.display())),
         Err(e) => logs.push(format!("File logging disabled: {}", e)),
@@ -91,39 +85,34 @@ fn main() -> Result<()> {
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([ursa_minor_ffb::ui::WINDOW_WIDTH, initial_height])
-            .with_min_inner_size([420.0, ursa_minor_ffb::ui::WINDOW_HEIGHT_COLLAPSED])
-            .with_resizable(false)
+            .with_inner_size([
+                ursa_minor_ffb::ui::WINDOW_WIDTH,
+                ursa_minor_ffb::ui::WINDOW_HEIGHT,
+            ])
+            .with_min_inner_size([ursa_minor_ffb::ui::WINDOW_MIN_WIDTH, 200.0])
+            .with_resizable(true)
             .with_maximize_button(false)
             .with_minimize_button(true),
         ..Default::default()
     };
 
-    let app = UiState {
+    let app = UiState::new(
         controller_connected,
-
         status,
         aircraft_title,
-
         config,
         preset_store,
         saved_baseline,
-        toast: None,
-        show_reset_confirm: false,
-        update_prompt: None,
-        show_live_aircraft_data: app_settings.show_live_aircraft_data,
-        sidestick_variant: app_settings.sidestick_variant,
+        app_settings.show_live_aircraft_data,
+        app_settings.sidestick_variant,
         effects,
-
-        tx_hid: tx_hid.clone(),
-        logs: logs.clone(),
+        tx_hid.clone(),
+        logs.clone(),
         last_vars,
-
         hold,
-
         rx_ui,
-        tx_ui: tx_ui.clone(),
-    };
+        tx_ui.clone(),
+    );
 
     let tx_ui_for_tray = tx_ui.clone();
 

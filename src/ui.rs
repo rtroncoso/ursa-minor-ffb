@@ -23,10 +23,14 @@ const TOAST_DURATION: Duration = Duration::from_secs(3);
 const TOAST_BOTTOM_MARGIN: f32 = 16.0;
 const SQUARE_BUTTON_ROUNDING: f32 = 4.0;
 
-pub const WINDOW_WIDTH: f32 = 520.0;
-pub const WINDOW_HEIGHT_EXPANDED: f32 = 700.0;
-pub const LIVE_DATA_EXTRA_HEIGHT: f32 = 300.0;
-pub const WINDOW_HEIGHT_COLLAPSED: f32 = WINDOW_HEIGHT_EXPANDED - LIVE_DATA_EXTRA_HEIGHT;
+pub const WINDOW_WIDTH: f32 = 530.0;
+pub const WINDOW_HEIGHT: f32 = 635.0;
+pub const WINDOW_MIN_WIDTH: f32 = 420.0;
+
+const PANEL_MARGIN_H: f32 = 12.0;
+const PANEL_MARGIN_V: f32 = 8.0;
+const VIEWPORT_BOTTOM_EXTRA: f32 = 16.0;
+const EFFECT_VALUE_WIDTH: f32 = 56.0;
 
 #[derive(Clone, Copy)]
 enum Chevron {
@@ -146,11 +150,143 @@ pub struct UiState {
 
     pub rx_ui: Receiver<UiCmd>,
     pub tx_ui: Sender<UiCmd>,
+
+    viewport_sync: ViewportSync,
+}
+
+#[derive(Default)]
+struct ViewportSync {
+    synced_height: f32,
+    last_width: f32,
 }
 
 impl UiState {
-    fn kv_line(ui: &mut egui::Ui, k: &str, v: impl Into<String>) {
-        ui.label(RichText::new(format!("{}: {}", k, v.into())).strong());
+    pub fn new(
+        controller_connected: Arc<AtomicBool>,
+        status: Arc<Mutex<SimStatus>>,
+        aircraft_title: Arc<Mutex<String>>,
+        config: Arc<PresetShared>,
+        preset_store: PresetStore,
+        saved_baseline: Preset,
+        show_live_aircraft_data: bool,
+        sidestick_variant: SidestickVariant,
+        effects: EffectsShared,
+        tx_hid: Sender<HidCmd>,
+        logs: LogBuffer,
+        last_vars: Arc<Mutex<Option<FlightVars>>>,
+        hold: Arc<AtomicBool>,
+        rx_ui: Receiver<UiCmd>,
+        tx_ui: Sender<UiCmd>,
+    ) -> Self {
+        Self {
+            controller_connected,
+            status,
+            aircraft_title,
+            config,
+            preset_store,
+            saved_baseline,
+            toast: None,
+            show_reset_confirm: false,
+            update_prompt: None,
+            show_live_aircraft_data,
+            sidestick_variant,
+            effects,
+            tx_hid,
+            logs,
+            last_vars,
+            hold,
+            rx_ui,
+            tx_ui,
+            viewport_sync: ViewportSync::default(),
+        }
+    }
+
+    fn live_data_fields(v: Option<&FlightVars>, aircraft: &str) -> Vec<(&'static str, String)> {
+        let mut fields = Vec::new();
+        if !aircraft.is_empty() {
+            fields.push(("Aircraft", aircraft.to_string()));
+        }
+
+        match v {
+            Some(v) => {
+                fields.push((
+                    "Airspeed (kt)",
+                    format!("{:.1}", v.airspeed_indicated),
+                ));
+                fields.push(("GS (kt)", format!("{:.1}", v.ground_speed_kt)));
+                fields.push(("On Ground", v.on_ground.to_string()));
+                fields.push(("Bank (°)", format!("{:.1}", v.bank_deg)));
+                fields.push(("Wind (kt)", format!("{:.1}", v.wind_kt)));
+                fields.push(("Wind from (°)", format!("{:.0}", v.wind_dir_deg)));
+                fields.push(("VS (fpm)", format!("{:.0}", v.vertical_speed_fpm)));
+                fields.push(("Eng RPM", format!("{:.0}", v.eng_rpm)));
+                if v.num_engines > 0 {
+                    fields.push(("Engines", v.num_engines.to_string()));
+                }
+                if let Some(pct) = v.extras.get("spoilers_pct") {
+                    fields.push(("Spoilers (%)", format!("{:.0}", pct)));
+                }
+                if let Some(n1) = v.extras.get("eng_n1_1") {
+                    fields.push(("N1 (%)", format!("{:.1}", n1)));
+                }
+                if let Some(n2) = v.extras.get("eng_n2_1") {
+                    fields.push(("N2 (%)", format!("{:.1}", n2)));
+                }
+                if let Some(thr) = v.extras.get("eng_throttle_1") {
+                    fields.push(("Throttle (%)", format!("{:.1}", thr)));
+                }
+                fields.push(("Flaps (%)", format!("{:.0}", v.flaps_pct)));
+                fields.push((
+                    "Gear",
+                    if v.gear_handle > 0.5 {
+                        "Down".to_string()
+                    } else {
+                        "Up".to_string()
+                    },
+                ));
+                fields.push(("Stall", v.stalled.to_string()));
+                fields.push(("Paused", v.paused.to_string()));
+            }
+            None => {
+                fields.extend([
+                    ("Airspeed (kt)", "—".to_string()),
+                    ("GS (kt)", "—".to_string()),
+                    ("On Ground", "—".to_string()),
+                    ("Bank (°)", "—".to_string()),
+                    ("Wind (kt)", "—".to_string()),
+                    ("Flaps (%)", "—".to_string()),
+                    ("Gear", "—".to_string()),
+                    ("Stall", "—".to_string()),
+                    ("Paused", "—".to_string()),
+                ]);
+            }
+        }
+
+        fields
+    }
+
+    fn live_data_grid(ui: &mut egui::Ui, fields: &[(&'static str, String)]) {
+        let mid = fields.len().div_ceil(2);
+        let (left, right) = fields.split_at(mid);
+
+        ui.columns(2, |columns| {
+            columns[0].vertical(|ui| {
+                for (key, value) in left {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("{key}:")).strong());
+                        ui.label(value);
+                    });
+                }
+            });
+            columns[1].vertical(|ui| {
+                for (key, value) in right {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("{key}:")).strong());
+                        ui.label(value);
+                    });
+                }
+            });
+        });
     }
 
     fn preset_needs_save(&self) -> bool {
@@ -219,24 +355,190 @@ impl UiState {
             });
     }
 
-    fn set_live_aircraft_data_visible(&mut self, ctx: &egui::Context, visible: bool) {
+    fn set_live_aircraft_data_visible(&mut self, visible: bool) {
+        if self.show_live_aircraft_data == visible {
+            return;
+        }
         self.show_live_aircraft_data = visible;
         let mut settings = self.preset_store.load_settings();
         settings.show_live_aircraft_data = visible;
         let _ = self.preset_store.save_settings(&settings);
-        self.resize_for_live_data_panel(ctx);
+        self.viewport_sync.synced_height = 0.0;
     }
 
-    fn resize_for_live_data_panel(&self, ctx: &egui::Context) {
-        let height = if self.show_live_aircraft_data {
-            WINDOW_HEIGHT_EXPANDED
-        } else {
-            WINDOW_HEIGHT_COLLAPSED
-        };
+    fn sync_viewport_to_content(&mut self, ctx: &egui::Context) {
+        let content_h = ctx
+            .data(|d| d.get_temp::<f32>(egui::Id::new("central_content_height")))
+            .unwrap_or(0.0);
+        let top_h = ctx
+            .data(|d| d.get_temp::<f32>(egui::Id::new("top_panel_height")))
+            .unwrap_or(0.0);
+        if content_h <= 0.0 {
+            return;
+        }
+
+        let frame_margin = PANEL_MARGIN_V * 2.0;
+        let desired_h =
+            (top_h + content_h + frame_margin + VIEWPORT_BOTTOM_EXTRA).ceil();
+
+        let width = ctx
+            .input(|i| i.viewport().inner_rect.map(|r| r.width()).unwrap_or(WINDOW_WIDTH))
+            .max(WINDOW_MIN_WIDTH);
+
+        if (self.viewport_sync.synced_height - desired_h).abs() < 2.0
+            && (self.viewport_sync.last_width - width).abs() < 1.0
+        {
+            return;
+        }
+
+        self.viewport_sync.synced_height = desired_h;
+        self.viewport_sync.last_width = width;
+
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
-            WINDOW_WIDTH,
-            height,
+            width, desired_h,
         )));
+    }
+
+    fn rumble_slider_width(ui: &egui::Ui) -> (f32, f32) {
+        let indicator_w = ui.style().spacing.interact_size.y;
+        let gap = ui.spacing().item_spacing.x;
+        let reserved = EFFECT_VALUE_WIDTH + indicator_w + gap * 2.0;
+        let slider_w = (ui.available_width() - reserved).max(60.0);
+        (slider_w, indicator_w)
+    }
+
+    fn effect_row(
+        ui: &mut egui::Ui,
+        name: &str,
+        val: &mut f32,
+        range: std::ops::RangeInclusive<f32>,
+        active: bool,
+        on_change: &mut bool,
+    ) {
+        let row_h = ui.style().spacing.interact_size.y;
+        ui.horizontal(|ui| {
+            ui.set_width(ui.available_width());
+            ui.add(
+                egui::Label::new(RichText::new(name).strong()).truncate(false),
+            );
+            let (slider_w, indicator_w) = Self::rumble_slider_width(ui);
+            let slider_changed = ui
+                .allocate_ui_with_layout(
+                    egui::vec2(slider_w, row_h),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.style_mut().spacing.slider_width = slider_w;
+                        ui.add(
+                            egui::Slider::new(val, range.clone())
+                                .show_value(false)
+                                .fixed_decimals(1)
+                                .trailing_fill(true),
+                        )
+                    },
+                )
+                .inner
+                .changed();
+            let value_changed = ui
+                .allocate_ui_with_layout(
+                    egui::vec2(EFFECT_VALUE_WIDTH, row_h),
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
+                        ui.add(
+                            egui::DragValue::new(val)
+                                .fixed_decimals(1)
+                                .clamp_range(range),
+                        )
+                    },
+                )
+                .inner
+                .changed();
+            ui.allocate_ui_with_layout(
+                egui::vec2(indicator_w, row_h),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    let (color, filled) = if active {
+                        (Color32::WHITE, true)
+                    } else {
+                        (Color32::from_gray(90), false)
+                    };
+                    circle_indicator_colored(ui, color, filled);
+                },
+            );
+
+            if slider_changed || value_changed {
+                *on_change = true;
+            }
+        });
+    }
+
+    fn taxi_bound_row(
+        ui: &mut egui::Ui,
+        name: &str,
+        val: &mut f64,
+        range: std::ops::RangeInclusive<f64>,
+        active: bool,
+        on_change: &mut bool,
+    ) {
+        let row_h = ui.style().spacing.interact_size.y;
+        let mut tmp = *val as f32;
+        let slider_range = (*range.start() as f32)..=(*range.end() as f32);
+        ui.horizontal(|ui| {
+            ui.set_width(ui.available_width());
+            ui.add(
+                egui::Label::new(RichText::new(name).strong()).truncate(false),
+            );
+            let (slider_w, indicator_w) = Self::rumble_slider_width(ui);
+            let slider_changed = ui
+                .allocate_ui_with_layout(
+                    egui::vec2(slider_w, row_h),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.style_mut().spacing.slider_width = slider_w;
+                        ui.add(
+                            egui::Slider::new(&mut tmp, slider_range.clone())
+                                .show_value(false)
+                                .fixed_decimals(1)
+                                .trailing_fill(true),
+                        )
+                    },
+                )
+                .inner
+                .changed();
+            let value_changed = ui
+                .allocate_ui_with_layout(
+                    egui::vec2(EFFECT_VALUE_WIDTH, row_h),
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut tmp)
+                                .fixed_decimals(1)
+                                .clamp_range(slider_range),
+                        )
+                    },
+                )
+                .inner
+                .changed();
+            ui.allocate_ui_with_layout(
+                egui::vec2(indicator_w, row_h),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    let (color, filled) = if active {
+                        (Color32::WHITE, true)
+                    } else {
+                        (Color32::from_gray(90), false)
+                    };
+                    circle_indicator_colored(ui, color, filled);
+                },
+            );
+
+            if slider_changed {
+                *val = tmp as f64;
+                *on_change = true;
+            } else if value_changed {
+                *val = tmp as f64;
+                *on_change = true;
+            }
+        });
     }
 
     fn select_preset(&mut self, kind: PresetKind) {
@@ -339,79 +641,6 @@ impl UiState {
             }
         }
     }
-
-    fn effect_row(
-        ui: &mut egui::Ui,
-        name: &str,
-        val: &mut f32,
-        range: std::ops::RangeInclusive<f32>,
-        active: bool,
-        on_change: &mut bool,
-    ) {
-        egui::Grid::new(format!("row_{}", name))
-            .num_columns(3)
-            .spacing(Vec2::new(12.0, 8.0))
-            .show(ui, |ui| {
-                ui.label(RichText::new(name).strong());
-                let desired_h = ui.style().spacing.interact_size.y;
-                let w = (ui.available_width() * 0.55).clamp(140.0, 320.0);
-                let slider = egui::Slider::new(val, range).trailing_fill(true);
-                if ui.add_sized([w, desired_h], slider).changed() {
-                    *on_change = true;
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let (color, filled) = if active {
-                        (Color32::WHITE, true)
-                    } else {
-                        (Color32::from_gray(90), false)
-                    };
-                    circle_indicator_colored(ui, color, filled);
-                });
-                ui.end_row();
-            });
-    }
-
-    fn taxi_bound_row(
-        ui: &mut egui::Ui,
-        name: &str,
-        val: &mut f64,
-        range: std::ops::RangeInclusive<f64>,
-        active: bool,
-        on_change: &mut bool,
-    ) {
-        egui::Grid::new(format!("taxi_{}", name))
-            .num_columns(3)
-            .spacing(Vec2::new(12.0, 8.0))
-            .show(ui, |ui| {
-                ui.label(RichText::new(name).strong());
-
-                let desired_h = ui.style().spacing.interact_size.y;
-                let w = (ui.available_width() * 0.55).clamp(140.0, 320.0);
-
-                let mut tmp = *val as f32;
-                let r = (*range.start() as f32)..=(*range.end() as f32);
-                if ui
-                    .add_sized(
-                        [w, desired_h],
-                        egui::Slider::new(&mut tmp, r).trailing_fill(true),
-                    )
-                    .changed()
-                {
-                    *val = tmp as f64;
-                    *on_change = true;
-                }
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let (color, filled) = if active {
-                        (Color32::WHITE, true)
-                    } else {
-                        (Color32::from_gray(90), false)
-                    };
-                    circle_indicator_colored(ui, color, filled);
-                });
-                ui.end_row();
-            });
-    }
 }
 
 impl eframe::App for UiState {
@@ -423,64 +652,80 @@ impl eframe::App for UiState {
 
         let mut style = (*ctx.style()).clone();
         style.spacing.item_spacing = Vec2::new(6.0, 6.0);
-        style.spacing.slider_width = 160.0;
         ctx.set_style(style);
 
-        egui::TopBottomPanel::top("top").show(ctx, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                let st = *self.status.lock();
-                status_badge(ui, &st);
-                ui.separator();
-
-                let controller_ok = self.controller_connected.load(Ordering::Relaxed);
-                controller_badge_dot(ui, controller_ok);
-
-                ui.separator();
+        let top_frame =
+            egui::Frame::default().inner_margin(egui::Margin::symmetric(PANEL_MARGIN_H, 6.0));
+        egui::TopBottomPanel::top("top")
+            .frame(top_frame)
+            .show(ctx, |ui| {
+            let top_bar = ui.scope(|ui| {
                 ui.horizontal(|ui| {
+                    let st = *self.status.lock();
+                    status_badge(ui, &st);
+                    ui.separator();
+
+                    let controller_ok = self.controller_connected.load(Ordering::Relaxed);
+                    controller_badge_dot(ui, controller_ok);
+
+                    let ac = self.aircraft_title.lock().clone();
+                    if !ac.is_empty() {
+                        ui.separator();
+                        ui.label(RichText::new(ac).italics());
+                    }
+
                     ui.with_layout(
-                        egui::Layout::left_to_right(egui::Align::Center),
+                        egui::Layout::right_to_left(egui::Align::Center),
                         |ui| {
-                            ui.label(RichText::new("Sidestick").strong());
-                            let current_variant = self.sidestick_variant;
-                            egui::ComboBox::from_id_source("sidestick_variant")
-                                .selected_text(current_variant.label())
-                                .show_ui(ui, |ui| {
-                                    for variant in SidestickVariant::ALL {
-                                        if ui
-                                            .selectable_label(
-                                                current_variant == variant,
-                                                variant.label(),
-                                            )
-                                            .clicked()
-                                        {
-                                            self.select_sidestick_variant(variant);
-                                        }
-                                    }
-                                });
+                            ui.set_width(ui.available_width());
+                            let holding = self.hold.load(Ordering::Relaxed);
+                            if !holding {
+                                if ui.button("⛔ Stop").clicked() {
+                                    self.hold.store(true, Ordering::Relaxed);
+                                    let _ = self.tx_hid.send(HidCmd::SetHold(true));
+                                    tray::notify_held(true);
+                                }
+                            } else if ui.button("▶ Resume").clicked() {
+                                self.hold.store(false, Ordering::Relaxed);
+                                let _ = self.tx_hid.send(HidCmd::SetHold(false));
+                                tray::notify_held(false);
+                            }
+
+                            ui.separator();
+
+                            ui.horizontal(|ui| {
+                                ui.with_layout(
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(RichText::new("Sidestick").strong());
+                                        let current_variant = self.sidestick_variant;
+                                        egui::ComboBox::from_id_source("sidestick_variant")
+                                            .selected_text(current_variant.label())
+                                            .show_ui(ui, |ui| {
+                                                for variant in SidestickVariant::ALL {
+                                                    if ui
+                                                        .selectable_label(
+                                                            current_variant == variant,
+                                                            variant.label(),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        self.select_sidestick_variant(variant);
+                                                    }
+                                                }
+                                            });
+                                    },
+                                );
+                            });
                         },
                     );
                 });
-
-                let ac = self.aircraft_title.lock().clone();
-                if !ac.is_empty() {
-                    ui.separator();
-                    ui.label(RichText::new(ac).italics());
-                }
-
-                ui.separator();
-
-                let holding = self.hold.load(Ordering::Relaxed);
-                if !holding {
-                    if ui.button("⛔ Stop").clicked() {
-                        self.hold.store(true, Ordering::Relaxed);
-                        let _ = self.tx_hid.send(HidCmd::SetHold(true));
-                        tray::notify_held(true);
-                    }
-                } else if ui.button("▶ Resume").clicked() {
-                    self.hold.store(false, Ordering::Relaxed);
-                    let _ = self.tx_hid.send(HidCmd::SetHold(false));
-                    tray::notify_held(false);
-                }
+            });
+            ctx.data_mut(|d| {
+                d.insert_temp(
+                    egui::Id::new("top_panel_height"),
+                    top_bar.response.rect.height(),
+                );
             });
         });
 
@@ -488,15 +733,15 @@ impl eframe::App for UiState {
 
         {
             let mut panel_frame = egui::Frame::central_panel(&ctx.style());
-            panel_frame.inner_margin = egui::Margin {
-                left: 12.0,
-                right: 12.0,
-                top: 8.0,
-                bottom: 48.0,
-            };
+            panel_frame.inner_margin =
+                egui::Margin::symmetric(PANEL_MARGIN_H, PANEL_MARGIN_V);
             egui::CentralPanel::default()
                 .frame(panel_frame)
                 .show(ctx, |ui| {
+                let content = ui.scope(|ui| {
+                let panel_w = ui.available_width();
+                ui.set_width(panel_w);
+                ui.set_min_width(panel_w);
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Preset").strong());
                     let current = self.config.kind();
@@ -535,52 +780,6 @@ impl eframe::App for UiState {
                     );
                 });
 
-                if self.show_reset_confirm {
-                    egui::Window::new("Reset preset")
-                        .collapsible(false)
-                        .resizable(false)
-                        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                        .show(ctx, |ui| {
-                            ui.label("Reset this preset to factory defaults?");
-                            ui.label("This action cannot be undone. Your saved preset file will be deleted.");
-                            ui.horizontal(|ui| {
-                                if ui.button("Cancel").clicked() {
-                                    self.show_reset_confirm = false;
-                                }
-                                if ui.button("Reset").clicked() {
-                                    self.confirm_reset_preset();
-                                    self.show_reset_confirm = false;
-                                }
-                            });
-                        });
-                }
-
-                if let Some(release) = self.update_prompt.clone() {
-                    let current = env!("CARGO_PKG_VERSION");
-                    let latest = release.tag.trim_start_matches('v');
-                    egui::Window::new("Update available")
-                        .collapsible(false)
-                        .resizable(false)
-                        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                        .show(ctx, |ui| {
-                            ui.label(format!("A new version of Ursa Minor FFB is available."));
-                            ui.label(format!("Current: {current}"));
-                            ui.label(format!("Latest:  {latest}"));
-                            ui.add_space(6.0);
-                            if ui.link("View release notes").clicked() {
-                                Self::open_url(&release.html_url);
-                            }
-                            ui.horizontal(|ui| {
-                                if ui.button("Not now").clicked() {
-                                    self.update_prompt = None;
-                                }
-                                if ui.button("Update now").clicked() {
-                                    self.start_update(ctx, &release);
-                                }
-                            });
-                        });
-                }
-
                 ui.add_space(8.0);
                 ui.heading("Rumble Effects");
                 ui.add_space(6.0);
@@ -609,8 +808,6 @@ impl eframe::App for UiState {
                         ground_active || ground_thump_active,
                         &mut _changed,
                     );
-
-                    ui.add_space(2.0);
 
                     {
                         let mut start = cfg.taxi_start_kn;
@@ -645,8 +842,6 @@ impl eframe::App for UiState {
                         cfg.taxi_start_kn = start.clamp(0.0, 59.0);
                         cfg.taxi_end_kn = end.clamp(cfg.taxi_start_kn + 0.5, 60.0);
                     }
-
-                    ui.add_space(6.0);
 
                     UiState::effect_row(
                         ui,
@@ -713,6 +908,7 @@ impl eframe::App for UiState {
                     ui.with_layout(
                         egui::Layout::right_to_left(egui::Align::Center),
                         |ui| {
+                            ui.set_width(ui.available_width());
                             let chevron = if self.show_live_aircraft_data {
                                 Chevron::Down
                             } else {
@@ -722,82 +918,81 @@ impl eframe::App for UiState {
                                 .on_hover_text("Show/hide live aircraft data")
                                 .clicked()
                             {
-                                self.set_live_aircraft_data_visible(
-                                    ctx,
-                                    !self.show_live_aircraft_data,
-                                );
+                                self.set_live_aircraft_data_visible(!self.show_live_aircraft_data);
                             }
                         },
                     );
                 });
 
+                if !self.show_live_aircraft_data {
+                    ui.add_space(ui.spacing().item_spacing.y);
+                }
+
                 if self.show_live_aircraft_data {
-                let ac = self.aircraft_title.lock().clone();
-                if !ac.is_empty() {
-                    UiState::kv_line(ui, "Aircraft", ac);
+                    ui.add_space(ui.spacing().item_spacing.y);
+                    let ac = self.aircraft_title.lock().clone();
+                    let v = self.last_vars.lock().clone();
+                    let fields = Self::live_data_fields(v.as_ref(), &ac);
+                    Self::live_data_grid(ui, &fields);
                 }
-                let v = self.last_vars.lock().clone();
-                match v {
-                    Some(v) => {
-                        UiState::kv_line(
-                            ui,
-                            "Airspeed (kt)",
-                            format!("{:.1}", v.airspeed_indicated),
-                        );
-                        UiState::kv_line(ui, "GS (kt)", format!("{:.1}", v.ground_speed_kt));
-                        UiState::kv_line(ui, "On Ground", v.on_ground.to_string());
-                        UiState::kv_line(ui, "Bank (°)", format!("{:.1}", v.bank_deg));
-                        UiState::kv_line(ui, "Wind (kt)", format!("{:.1}", v.wind_kt));
-                        UiState::kv_line(ui, "Wind from (°)", format!("{:.0}", v.wind_dir_deg));
-                        UiState::kv_line(
-                            ui,
-                            "VS (fpm)",
-                            format!("{:.0}", v.vertical_speed_fpm),
-                        );
-                        UiState::kv_line(ui, "Eng RPM", format!("{:.0}", v.eng_rpm));
-                        if v.num_engines > 0 {
-                            UiState::kv_line(ui, "Engines", v.num_engines.to_string());
-                        }
-                        if let Some(pct) = v.extras.get("spoilers_pct") {
-                            UiState::kv_line(ui, "Spoilers (%)", format!("{:.0}", pct));
-                        }
-                        if let Some(n1) = v.extras.get("eng_n1_1") {
-                            UiState::kv_line(ui, "N1 (%)", format!("{:.1}", n1));
-                        }
-                        if let Some(n2) = v.extras.get("eng_n2_1") {
-                            UiState::kv_line(ui, "N2 (%)", format!("{:.1}", n2));
-                        }
-                        if let Some(thr) = v.extras.get("eng_throttle_1") {
-                            UiState::kv_line(ui, "Throttle (%)", format!("{:.1}", thr));
-                        }
-                        UiState::kv_line(ui, "Flaps (%)", format!("{:.0}", v.flaps_pct));
-                        UiState::kv_line(
-                            ui,
-                            "Gear",
-                            if v.gear_handle > 0.5 {
-                                "Down".to_string()
-                            } else {
-                                "Up".to_string()
-                            },
-                        );
-                        UiState::kv_line(ui, "Stall", v.stalled.to_string());
-                        UiState::kv_line(ui, "Paused", v.paused.to_string());
-                    }
-                    None => {
-                        UiState::kv_line(ui, "Airspeed (kt)", "—");
-                        UiState::kv_line(ui, "GS (kt)", "—");
-                        UiState::kv_line(ui, "On Ground", "—");
-                        UiState::kv_line(ui, "Bank (°)", "—");
-                        UiState::kv_line(ui, "Wind (kt)", "—");
-                        UiState::kv_line(ui, "Flaps (%)", "—");
-                        UiState::kv_line(ui, "Gear", "—");
-                        UiState::kv_line(ui, "Stall", "—");
-                        UiState::kv_line(ui, "Paused", "—");
-                    }
+                });
+
+                ctx.data_mut(|d| {
+                    d.insert_temp(
+                        egui::Id::new("central_content_height"),
+                        content.response.rect.height(),
+                    );
+                });
+
+                if self.show_reset_confirm {
+                    egui::Window::new("Reset preset")
+                        .collapsible(false)
+                        .resizable(false)
+                        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                        .show(ctx, |ui| {
+                            ui.label("Reset this preset to factory defaults?");
+                            ui.label("This action cannot be undone. Your saved preset file will be deleted.");
+                            ui.horizontal(|ui| {
+                                if ui.button("Cancel").clicked() {
+                                    self.show_reset_confirm = false;
+                                }
+                                if ui.button("Reset").clicked() {
+                                    self.confirm_reset_preset();
+                                    self.show_reset_confirm = false;
+                                }
+                            });
+                        });
                 }
+
+                if let Some(release) = self.update_prompt.clone() {
+                    let current = env!("CARGO_PKG_VERSION");
+                    let latest = release.tag.trim_start_matches('v');
+                    egui::Window::new("Update available")
+                        .collapsible(false)
+                        .resizable(false)
+                        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                        .show(ctx, |ui| {
+                            ui.label(format!("A new version of Ursa Minor FFB is available."));
+                            ui.label(format!("Current: {current}"));
+                            ui.label(format!("Latest:  {latest}"));
+                            ui.add_space(6.0);
+                            if ui.link("View release notes").clicked() {
+                                Self::open_url(&release.html_url);
+                            }
+                            ui.horizontal(|ui| {
+                                if ui.button("Not now").clicked() {
+                                    self.update_prompt = None;
+                                }
+                                if ui.button("Update now").clicked() {
+                                    self.start_update(ctx, &release);
+                                }
+                            });
+                        });
                 }
             });
         }
+
+        self.sync_viewport_to_content(ctx);
 
         self.draw_toast(ctx);
         if let Some(toast) = &self.toast {

@@ -42,9 +42,7 @@ fn wide(s: &str) -> Vec<u16> {
 struct TrayState {
     tx_ui: Sender<UiCmd>,
     ctx: egui::Context,
-    version_str: &'static str,
     nid: NOTIFYICONDATAW,
-    hwnd: HWND,
     is_held: bool, // drives Stop/Resume label
 }
 
@@ -265,9 +263,7 @@ pub fn spawn_tray_with_ctx(tx_ui: Sender<UiCmd>, ctx: egui::Context, app_version
         let state = Box::new(TrayState {
             tx_ui,
             ctx,
-            version_str: app_version,
             nid,
-            hwnd,
             is_held: false,
         });
         let _ = TRAY_STATE.set(Mutex::new(state));
