@@ -5,6 +5,8 @@ Unlock the full potential of your Winwing Ursa Minor Sidestick with custom force
 This project is a lightweight desktop app written in Rust with an egui UI and HID output.
 It lets you tune rumble effects for different flight states like ground roll, flaps, gear, stall, and more.
 
+[Official Flightsim.to store page](https://flightsim.to/addon/98251/ursa-minor-ffb)
+
 ---
 
 ## 🚀 Build Instructions
@@ -20,7 +22,7 @@ Clone and build:
 ```bash
 git clone https://github.com/rtroncoso/ursa-minor-ffb.git
 cd ursa-minor-ffb
-cargo build --release --features app
+cargo build --release --bin ursa-minor-ffb --features app
 ```
 
 The resulting binary will be in target/release/ursa-minor-ffb.exe.
@@ -28,7 +30,7 @@ The resulting binary will be in target/release/ursa-minor-ffb.exe.
 For debugging with console logs:
 
 ```bash
-cargo run --features app
+cargo run --bin ursa-minor-ffb --features app
 ```
 
 ## Testing
@@ -55,7 +57,7 @@ On Windows, build and test the full app (including GUI/HID workers):
 
 ```bash
 cargo test --features app
-cargo build --release --features app
+cargo build --release --bin ursa-minor-ffb --features app
 ```
 
 ## Disclaimer
