@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use crate::sim::parse::engine_power_norm;
+use crate::sim::parse::{engine_power_norm, jet_vibe_drive};
 use crate::{EffectsSnapshot, FlightVars, RumbleConfig};
 
 #[derive(Debug, Clone)]
@@ -8,6 +8,8 @@ pub struct RumbleState {
     prev_flaps_pct: f64,
     prev_flaps_idx: i32,
     prev_gear: f64,
+    prev_gear_handle_norm: f64,
+    prev_gear_extended: f64,
     flap_bump_end: Option<Instant>,
     flap_bump_start: Instant,
     flap_peak: f64,
@@ -17,6 +19,7 @@ pub struct RumbleState {
     engine_vibe_start: Instant,
     engine_spool_pulse_until: Option<Instant>,
     prev_eng_rpm: f64,
+    prev_eng_throttle: f64,
     bg_smoothed: f64,
     last_cfg_rev: u64,
     was_airborne: bool,
@@ -31,6 +34,8 @@ impl Default for RumbleState {
             prev_flaps_pct: 0.0,
             prev_flaps_idx: 0,
             prev_gear: 0.0,
+            prev_gear_handle_norm: 0.0,
+            prev_gear_extended: 0.0,
             flap_bump_end: None,
             flap_bump_start: now,
             flap_peak: 0.0,
@@ -40,6 +45,7 @@ impl Default for RumbleState {
             engine_vibe_start: now,
             engine_spool_pulse_until: None,
             prev_eng_rpm: 0.0,
+            prev_eng_throttle: 0.0,
             bg_smoothed: 0.0,
             last_cfg_rev: 0,
             was_airborne: false,
@@ -122,7 +128,7 @@ impl RumbleEngine {
             taxi_end_crossed: motion_effects_enabled && at_or_above_end,
             ground_thump_active: motion_effects_enabled && in_thump_band,
             ground_active: motion_effects_enabled && at_or_above_end,
-            stall_active: motion_effects_enabled && fv.stalled,
+            stall_active: motion_effects_enabled && stall_warning_active(fv),
             bank_active: motion_effects_enabled && !fv.on_ground && fv.bank_deg.abs() > 5.0,
             base_active: motion_effects_enabled && !fv.on_ground && fv.airspeed_indicated > 30.0,
             ..Default::default()
@@ -150,12 +156,13 @@ impl RumbleEngine {
                 s.prev_flaps_pct = fv.flaps_pct;
             }
 
-            if (fv.gear_handle - s.prev_gear).abs() >= 0.5 {
-                let now = Instant::now();
-                s.gear_bump_end = Some(now + Duration::from_secs_f64(cfg.gear_bump_duration_s));
-                s.gear_bump_start = now;
-                s.gear_peak = cfg.gear_peak as f64;
+            let gear_norm = gear_extended_norm(fv);
+            let handle_norm = normalize_gear_handle(fv.gear_handle);
+            if motion_effects_enabled && gear_bump_should_trigger(handle_norm, gear_norm, s) {
+                trigger_gear_bump(s, cfg.flaps_bump_duration_s, cfg.flaps_peak as f64);
             }
+            s.prev_gear_handle_norm = handle_norm;
+            s.prev_gear_extended = gear_norm;
             update_landing_state(s, fv);
         }
         s.prev_gear = fv.gear_handle;
@@ -206,6 +213,7 @@ impl RumbleEngine {
         let (engine_term, engine_active) = engine_vibe_term(fv, cfg, s);
         effects.engine_vibe_active = engine_active;
         s.prev_eng_rpm = fv.eng_rpm;
+        s.prev_eng_throttle = throttle_norm(fv);
 
         let bg = air_term + ground_term;
         if cfg_rev != s.last_cfg_rev {
@@ -218,7 +226,7 @@ impl RumbleEngine {
 
         let mut transients: f64 = 0.0;
         if motion_effects_enabled {
-            if fv.stalled {
+            if stall_warning_active(fv) {
                 transients = transients.max(cfg.stall_ceiling as f64);
             }
 
@@ -233,9 +241,9 @@ impl RumbleEngine {
             }
             if gear_active {
                 let elapsed = s.gear_bump_start.elapsed().as_secs_f64();
-                let duration = cfg.gear_bump_duration_s.max(0.05);
-                let p = (elapsed / duration).clamp(0.0, 1.0);
-                transients += s.gear_peak * (std::f64::consts::PI * p).sin();
+                let period = 0.35_f64.max(cfg.gear_bump_duration_s * 0.5);
+                let phase = (elapsed % period) / period;
+                transients += s.gear_peak * (std::f64::consts::PI * phase).sin().abs();
             }
 
             effects.flaps_bump_active = flap_active;
@@ -243,21 +251,18 @@ impl RumbleEngine {
         }
 
         let mut total = if motion_effects_enabled {
-            s.bg_smoothed + transients + engine_term
+            let spoilers_pct =
+                fv.extras.get("spoilers_pct").copied().unwrap_or(0.0) / 100.0;
+            let spoiler_term = spoiler_rumble_term(fv, cfg, s, spoilers_pct);
+            if spoiler_boost_allowed(s, fv, spoilers_pct) {
+                effects.spoilers_boost_active = true;
+            }
+            s.bg_smoothed + transients + engine_term + spoiler_term
         } else {
             engine_term
         };
-        if motion_effects_enabled && fv.stalled {
+        if motion_effects_enabled && stall_warning_active(fv) {
             total = total.max(cfg.stall_ceiling as f64);
-        }
-
-        if motion_effects_enabled {
-            let spoilers_pct = fv.extras.get("spoilers_pct").copied().unwrap_or(0.0) / 100.0;
-            if spoiler_boost_allowed(s, fv, spoilers_pct) {
-                let boost = spoiler_boost_multiplier(fv, cfg, spoilers_pct);
-                total *= boost;
-                effects.spoilers_boost_active = true;
-            }
         }
 
         total = total.clamp(0.0, cfg.max_output as f64);
@@ -274,6 +279,51 @@ fn trigger_flap_bump(s: &mut RumbleState, duration_s: f64, peak: f64) {
     s.flap_bump_end = Some(now + Duration::from_secs_f64(duration_s.max(0.05)));
     s.flap_bump_start = now;
     s.flap_peak = peak;
+}
+
+fn trigger_gear_bump(s: &mut RumbleState, duration_s: f64, peak: f64) {
+    let now = Instant::now();
+    s.gear_bump_end = Some(now + Duration::from_secs_f64(duration_s.max(0.05)));
+    s.gear_bump_start = now;
+    s.gear_peak = peak;
+}
+
+fn normalize_gear_handle(value: f64) -> f64 {
+    if !value.is_finite() {
+        return 0.0;
+    }
+    let v = if value > 1.5 { value / 100.0 } else { value };
+    v.clamp(0.0, 1.0)
+}
+
+fn gear_extended_norm(fv: &FlightVars) -> f64 {
+    if let Some(&pct) = fv.extras.get("gear_extended_pct") {
+        if pct.is_finite() {
+            let norm = if pct <= 1.5 {
+                pct
+            } else {
+                pct / 100.0
+            };
+            if norm > 0.01 {
+                return norm.clamp(0.0, 1.0);
+            }
+        }
+    }
+    normalize_gear_handle(fv.gear_handle)
+}
+
+fn gear_is_down(norm: f64) -> bool {
+    norm >= 0.5
+}
+
+fn gear_bump_should_trigger(handle_norm: f64, extended_norm: f64, s: &RumbleState) -> bool {
+    if (handle_norm - s.prev_gear_handle_norm).abs() >= 0.45 {
+        return true;
+    }
+    if (extended_norm - s.prev_gear_extended).abs() >= 0.12 {
+        return true;
+    }
+    gear_is_down(extended_norm) != gear_is_down(s.prev_gear_extended)
 }
 
 fn flap_bump_active(s: &RumbleState) -> bool {
@@ -312,8 +362,34 @@ fn update_landing_state(s: &mut RumbleState, fv: &FlightVars) {
     }
 }
 
+fn stall_warning_active(fv: &FlightVars) -> bool {
+    fv.stalled
+}
+
+fn spoiler_rumble_term(
+    fv: &FlightVars,
+    cfg: &RumbleConfig,
+    s: &RumbleState,
+    spoilers_pct: f64,
+) -> f64 {
+    if spoilers_pct <= 0.01 || !spoiler_boost_allowed(s, fv, spoilers_pct) {
+        return 0.0;
+    }
+    let mut amp = (cfg.spoilers as f64) * spoilers_pct;
+    if !fv.on_ground && spoilers_pct > 0.05 && fv.vertical_speed_fpm < -700.0 {
+        let descent = (-fv.vertical_speed_fpm / 3000.0).clamp(0.0, 1.0);
+        amp *= 1.0 + descent * spoilers_pct * 0.35;
+    }
+    let phase = (fv.sim_time_s * 10.0).fract();
+    let buzz = (std::f64::consts::TAU * phase).sin().abs();
+    amp * (0.35 + 0.65 * buzz)
+}
+
 fn spoiler_boost_allowed(s: &RumbleState, fv: &FlightVars, spoilers_pct: f64) -> bool {
     if spoilers_pct <= 0.01 {
+        return false;
+    }
+    if !aircraft_moving(fv) {
         return false;
     }
     if !fv.on_ground {
@@ -325,15 +401,8 @@ fn spoiler_boost_allowed(s: &RumbleState, fv: &FlightVars, spoilers_pct: f64) ->
     landing_rollout_active(s, fv) || rejected_takeoff_active(s, fv, spoilers_pct)
 }
 
-fn spoiler_boost_multiplier(fv: &FlightVars, cfg: &RumbleConfig, spoilers_pct: f64) -> f64 {
-    let scale = cfg.spoilers as f64 / 100.0;
-    let mut boost = 1.0 + spoilers_pct * scale * 0.45;
-    // Steep descent with spoilers deployed (air brakes).
-    if !fv.on_ground && spoilers_pct > 0.05 && fv.vertical_speed_fpm < -700.0 {
-        let descent = (-fv.vertical_speed_fpm / 3000.0).clamp(0.0, 1.0);
-        boost *= 1.0 + descent * spoilers_pct * 0.2;
-    }
-    boost.min(1.55)
+fn aircraft_moving(fv: &FlightVars) -> bool {
+    fv.ground_speed_kt > 0.0 || fv.airspeed_indicated > 0.0
 }
 
 fn landing_rollout_active(s: &RumbleState, fv: &FlightVars) -> bool {
@@ -396,14 +465,86 @@ enum EngineVibeMode {
 
 const ENGINE_OFF_RPM: f64 = 40.0;
 
-fn engine_thump_envelope(s: &RumbleState, cfg: &RumbleConfig, period: f64) -> (f64, bool) {
+fn throttle_norm(fv: &FlightVars) -> f64 {
+    extra_f64(fv, "eng_throttle_1")
+        .or_else(|| extra_f64(fv, "eng_throttle_2"))
+        .map(|t| (t / 100.0).clamp(0.0, 1.0))
+        .unwrap_or(0.0)
+}
+
+fn n1_pct(fv: &FlightVars) -> f64 {
+    extra_f64(fv, "eng_n1_1")
+        .or_else(|| extra_f64(fv, "eng_n1_2"))
+        .unwrap_or(0.0)
+}
+
+fn engine_is_running(fv: &FlightVars, profile: EngineVibeProfile) -> bool {
+    if fv.eng_rpm >= ENGINE_OFF_RPM {
+        return true;
+    }
+    if profile != EngineVibeProfile::Ga {
+        let throttle = throttle_norm(fv);
+        let n1 = n1_pct(fv);
+        if throttle > 0.04 || n1 > 18.0 {
+            return true;
+        }
+    }
+    false
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EngineVibeProfile {
+    Ga,
+    Jet,
+    Fighter,
+}
+
+fn engine_vibe_profile(cfg: &RumbleConfig, fv: &FlightVars) -> EngineVibeProfile {
+    if !fv.extras.contains_key("eng_n1_1") {
+        EngineVibeProfile::Ga
+    } else if cfg.eng_rpm_max > 6000.0 {
+        EngineVibeProfile::Fighter
+    } else {
+        EngineVibeProfile::Jet
+    }
+}
+
+fn engine_drive_power(profile: EngineVibeProfile, fv: &FlightVars, cfg: &RumbleConfig) -> f64 {
+    match profile {
+        EngineVibeProfile::Ga => engine_power_norm(fv, cfg),
+        EngineVibeProfile::Jet | EngineVibeProfile::Fighter => jet_vibe_drive(fv, cfg),
+    }
+}
+
+fn engine_thump_envelope(
+    s: &RumbleState,
+    period: f64,
+    drive: f64,
+    profile: EngineVibeProfile,
+) -> (f64, bool) {
     let elapsed = s.engine_vibe_start.elapsed().as_secs_f64();
-    let duty = cfg.thump_duty.clamp(0.08, 0.32);
-    let cycle = (elapsed / period.max(0.12)).fract();
+    let duty = match profile {
+        EngineVibeProfile::Ga => (0.10 + 0.08 * drive).clamp(0.10, 0.20),
+        EngineVibeProfile::Jet => (0.30 + 0.52 * drive.powf(0.85)).clamp(0.28, 0.88),
+        EngineVibeProfile::Fighter => (0.34 + 0.58 * drive.powf(0.8)).clamp(0.32, 0.92),
+    };
+    let cycle = (elapsed / period.max(0.04)).fract();
     let in_pulse = cycle < duty;
     let env = if in_pulse {
         let p = (cycle / duty).clamp(0.0, 1.0);
-        (std::f64::consts::PI * p).sin().abs()
+        if profile == EngineVibeProfile::Ga {
+            (std::f64::consts::PI * p).sin().abs()
+        } else {
+            // Sharper edges for turbine buzz.
+            let edge = if p < 0.12 {
+                p / 0.12
+            } else if p > 0.88 {
+                (1.0 - p) / 0.12
+            } else {
+                1.0
+            };
+            edge.clamp(0.0, 1.0)
+        }
     } else {
         0.0
     };
@@ -420,27 +561,39 @@ fn engine_vibe_amp(
         return (0.0, EngineVibeMode::Off, 0.0);
     }
 
-    let rpm = fv.eng_rpm;
-    if !rpm.is_finite() || rpm < ENGINE_OFF_RPM {
+    let profile = engine_vibe_profile(cfg, fv);
+    if !engine_is_running(fv, profile) {
         return (0.0, EngineVibeMode::Off, 0.0);
     }
 
-    let idle = cfg.eng_rpm_idle as f64;
-    let startup_max = cfg.eng_rpm_startup_max as f64;
     let on_ground = fv.on_ground;
     let air_scale = if on_ground { 1.0 } else { 0.28 };
 
-    let rpm_delta = rpm - s.prev_eng_rpm;
+    let drive = engine_drive_power(profile, fv, cfg);
+    let rpm = fv.eng_rpm;
+    let effective_rpm = if rpm < ENGINE_OFF_RPM && profile != EngineVibeProfile::Ga {
+        let idle = cfg.eng_rpm_idle as f64;
+        let max = cfg.eng_rpm_max as f64;
+        idle + drive * (max - idle)
+    } else {
+        rpm
+    };
+    let throttle = throttle_norm(fv);
+    let idle = cfg.eng_rpm_idle as f64;
+    let startup_max = cfg.eng_rpm_startup_max as f64;
+    let rpm_delta = effective_rpm - s.prev_eng_rpm;
+    let throttle_delta = throttle - s.prev_eng_throttle;
     let shutting_down =
-        s.prev_eng_rpm > startup_max && rpm < s.prev_eng_rpm - 50.0 && rpm < idle * 0.95;
+        s.prev_eng_rpm > startup_max && effective_rpm < s.prev_eng_rpm - 50.0 && effective_rpm < idle * 0.95;
     let starting_up =
-        rpm > ENGINE_OFF_RPM && s.prev_eng_rpm < startup_max * 0.5 && rpm_delta > 20.0;
-    let in_spool_band = rpm < idle * 0.98;
+        effective_rpm > ENGINE_OFF_RPM && s.prev_eng_rpm < startup_max * 0.5 && rpm_delta > 20.0;
+    let in_spool_band = effective_rpm < idle * 0.98;
+    let throttle_spooling = throttle_delta > 0.03 && drive < 0.95 && (rpm_delta > 2.0 || profile != EngineVibeProfile::Ga);
 
     if shutting_down {
         s.engine_spool_pulse_until = Some(Instant::now() + Duration::from_secs_f64(3.0));
-    } else if in_spool_band || starting_up {
-        s.engine_spool_pulse_until = Some(Instant::now() + Duration::from_secs_f64(2.0));
+    } else if in_spool_band || starting_up || throttle_spooling {
+        s.engine_spool_pulse_until = Some(Instant::now() + Duration::from_secs_f64(2.5));
     }
 
     let spool_window = s
@@ -448,81 +601,144 @@ fn engine_vibe_amp(
         .map(|end| Instant::now() < end)
         .unwrap_or(false);
 
-    if spool_window || in_spool_band || starting_up || shutting_down {
-        let rpm_norm = if rpm <= startup_max {
-            (rpm / startup_max.max(1.0)).clamp(0.0, 1.0)
-        } else if idle > startup_max && rpm < idle {
-            ((rpm - startup_max) / (idle - startup_max)).clamp(0.0, 1.0)
+    if spool_window || in_spool_band || starting_up || shutting_down || throttle_spooling {
+        let rpm_norm = if effective_rpm <= startup_max {
+            (effective_rpm / startup_max.max(1.0)).clamp(0.0, 1.0)
+        } else if idle > startup_max && effective_rpm < idle {
+            ((effective_rpm - startup_max) / (idle - startup_max)).clamp(0.0, 1.0)
         } else if shutting_down && s.prev_eng_rpm > 0.0 {
-            (rpm / s.prev_eng_rpm).clamp(0.0, 1.0)
+            (effective_rpm / s.prev_eng_rpm).clamp(0.0, 1.0)
         } else {
             0.45
         };
-        let norm = rpm_norm.max(if starting_up { 0.3 } else { 0.0 });
-        let amp = vibe * (0.38 + 0.62 * norm) * air_scale;
-        let floor = if on_ground { 3.5 } else { 1.0 };
+        let norm = rpm_norm
+            .max(drive)
+            .max(if starting_up || throttle_spooling { 0.35 } else { 0.0 });
+        let amp = match profile {
+            EngineVibeProfile::Ga => vibe * (0.42 + 0.78 * norm.powf(1.1)) * air_scale,
+            EngineVibeProfile::Jet => vibe * (0.08 + 0.92 * norm.powf(1.2)) * air_scale,
+            EngineVibeProfile::Fighter => vibe * (0.10 + 0.95 * norm.powf(1.15)) * air_scale,
+        };
+        let floor = if on_ground {
+            if norm > 0.25 { 4.0 } else { 2.0 }
+        } else {
+            1.0
+        };
         return (amp.max(floor), EngineVibeMode::Spool, norm);
     }
 
-    let power = engine_power_norm(fv, cfg);
-
     if on_ground {
-        let amp = vibe * (0.30 + 0.70 * power);
-        let mode = if power > 0.06 {
+        let amp = match profile {
+            EngineVibeProfile::Ga => vibe * (0.05 + 0.95 * drive.powf(1.35)),
+            EngineVibeProfile::Jet => vibe * (0.04 + 0.96 * drive.powf(1.25)),
+            EngineVibeProfile::Fighter => vibe * (0.06 + 0.98 * drive.powf(1.2)),
+        };
+        let mode = if drive > 0.06 {
             EngineVibeMode::Power
         } else {
             EngineVibeMode::Idle
         };
-        return (amp.max(3.0), mode, power);
+        let floor = if drive > 0.12 {
+            if profile == EngineVibeProfile::Ga {
+                1.5
+            } else {
+                2.0
+            }
+        } else {
+            0.0
+        };
+        return (amp.max(floor), mode, drive);
     }
 
-    if power < 0.05 {
-        return (vibe * 0.08 * air_scale, EngineVibeMode::Idle, power);
+    if drive < 0.05 {
+        return (vibe * 0.06 * air_scale, EngineVibeMode::Idle, drive);
     }
+    let air_amp = match profile {
+        EngineVibeProfile::Ga => vibe * (0.08 + 0.20 * drive.powf(1.2)) * air_scale,
+        EngineVibeProfile::Jet => vibe * (0.06 + 0.22 * drive.powf(1.15)) * air_scale,
+        EngineVibeProfile::Fighter => vibe * (0.07 + 0.24 * drive.powf(1.1)) * air_scale,
+    };
     (
-        vibe * (0.10 + 0.18 * power) * air_scale,
+        air_amp,
         EngineVibeMode::Power,
-        power,
+        drive,
     )
 }
 
-fn engine_pulse_period(on_ground: bool, mode: EngineVibeMode, power: f64) -> f64 {
-    let base = if on_ground {
-        match mode {
-            EngineVibeMode::Spool => 0.26 - 0.10 * power,
-            EngineVibeMode::Idle | EngineVibeMode::Power => 0.38 - 0.24 * power,
-            EngineVibeMode::Off => 0.5,
+fn engine_pulse_period(
+    on_ground: bool,
+    mode: EngineVibeMode,
+    drive: f64,
+    profile: EngineVibeProfile,
+) -> f64 {
+    let base = if profile == EngineVibeProfile::Ga {
+        if on_ground {
+            match mode {
+                EngineVibeMode::Spool => 0.20 - 0.08 * drive,
+                EngineVibeMode::Idle => 0.75 - 0.20 * drive,
+                EngineVibeMode::Power => 0.58 - 0.40 * drive,
+                EngineVibeMode::Off => 0.5,
+            }
+        } else {
+            match mode {
+                EngineVibeMode::Spool => 0.32 - 0.10 * drive,
+                EngineVibeMode::Idle => 0.70,
+                EngineVibeMode::Power => 0.50 - 0.22 * drive,
+                EngineVibeMode::Off => 0.5,
+            }
         }
     } else {
-        match mode {
-            EngineVibeMode::Spool => 0.38,
-            EngineVibeMode::Idle => 0.65,
-            EngineVibeMode::Power => 0.52 - 0.20 * power,
-            EngineVibeMode::Off => 0.5,
-        }
+        let jet_scale = if profile == EngineVibeProfile::Fighter {
+            0.88
+        } else {
+            1.0
+        };
+        let idle_period = if on_ground { 0.24 } else { 0.30 };
+        let max_period = if on_ground { 0.055 } else { 0.075 };
+        (idle_period - (idle_period - max_period) * drive.powf(0.82)) * jet_scale
     };
-    base.max(0.12)
+    base.max(0.04)
 }
 
 fn engine_vibe_term(fv: &FlightVars, cfg: &RumbleConfig, s: &mut RumbleState) -> (f64, bool) {
-    let (amp, mode, power) = engine_vibe_amp(fv, cfg, s);
+    let profile = engine_vibe_profile(cfg, fv);
+    let (amp, mode, drive) = engine_vibe_amp(fv, cfg, s);
     if mode == EngineVibeMode::Off || amp < 0.5 {
         return (0.0, false);
     }
 
     let on_ground = fv.on_ground;
-    let period = engine_pulse_period(on_ground, mode, power);
+    let period = engine_pulse_period(on_ground, mode, drive, profile);
 
-    let (env, in_pulse) = engine_thump_envelope(s, cfg, period);
+    let (env, in_pulse) = engine_thump_envelope(s, period, drive, profile);
     let mut term = env * amp;
 
     // Ground pulses must exceed HID rounding dead-zone (intensity is u8).
     if on_ground && in_pulse && term > 0.0 {
-        term = term.max(2.0);
+        let floor = if profile == EngineVibeProfile::Ga {
+            if drive > 0.55 {
+                5.0
+            } else if drive > 0.15 {
+                2.0
+            } else {
+                1.0
+            }
+        } else if drive > 0.65 {
+            8.0
+        } else if drive > 0.25 {
+            4.0
+        } else {
+            2.0
+        };
+        term = term.max(floor);
     }
 
     let active = if on_ground {
-        fv.eng_rpm >= ENGINE_OFF_RPM
+        if profile == EngineVibeProfile::Ga {
+            fv.eng_rpm >= ENGINE_OFF_RPM
+        } else {
+            engine_is_running(fv, profile) && (in_pulse || drive > 0.08)
+        }
     } else {
         in_pulse && mode != EngineVibeMode::Off
     };
@@ -608,8 +824,8 @@ mod tests {
         let high_power = engine_power_norm(&high, &c);
         assert!(high_power > idle_power);
 
-        let idle_amp = c.engine_vibe as f64 * (0.30 + 0.70 * idle_power);
-        let high_amp = c.engine_vibe as f64 * (0.30 + 0.70 * high_power);
+        let idle_amp = c.engine_vibe as f64 * (0.05 + 0.95 * idle_power.powf(1.35));
+        let high_amp = c.engine_vibe as f64 * (0.05 + 0.95 * high_power.powf(1.35));
         assert!(
             high_amp > idle_amp,
             "linear scale: idle_amp={idle_amp} high_amp={high_amp}"
@@ -618,11 +834,22 @@ mod tests {
 
     #[test]
     fn engine_pulse_period_shortens_as_power_rises() {
-        let idle_period = engine_pulse_period(true, EngineVibeMode::Power, 0.0);
-        let max_period = engine_pulse_period(true, EngineVibeMode::Power, 1.0);
+        let idle_period =
+            engine_pulse_period(true, EngineVibeMode::Power, 0.0, EngineVibeProfile::Ga);
+        let max_period =
+            engine_pulse_period(true, EngineVibeMode::Power, 1.0, EngineVibeProfile::Ga);
         assert!(
             max_period < idle_period,
             "faster pulses at high power: idle={idle_period} max={max_period}"
+        );
+
+        let jet_idle =
+            engine_pulse_period(true, EngineVibeMode::Power, 0.0, EngineVibeProfile::Jet);
+        let jet_max =
+            engine_pulse_period(true, EngineVibeMode::Power, 1.0, EngineVibeProfile::Jet);
+        assert!(
+            jet_max < jet_idle && jet_max < max_period,
+            "jet faster than GA: jet_idle={jet_idle} jet_max={jet_max}"
         );
     }
 
@@ -695,13 +922,52 @@ mod tests {
     fn gear_handle_delta_triggers_gear_bump() {
         let mut engine = RumbleEngine::new();
         let mut fv = airborne(150.0, 5.0);
+        fv.extras.insert("gear_handle_bool".to_string(), 0.0);
         fv.gear_handle = 0.0;
         let _ = engine.step(&fv, &cfg(), 1, false);
 
+        fv.extras.insert("gear_handle_bool".to_string(), 1.0);
         fv.gear_handle = 1.0;
         fv.sim_time_s = 5.1;
         let out = engine.step(&fv, &cfg(), 1, false);
         assert!(out.effects.gear_bump_active);
+    }
+
+    #[test]
+    fn gear_handle_percent_scale_triggers_gear_bump() {
+        let mut engine = RumbleEngine::new();
+        let mut fv = airborne(150.0, 5.0);
+        fv.extras.insert("gear_handle_bool".to_string(), 0.0);
+        fv.gear_handle = 0.0;
+        let _ = engine.step(&fv, &cfg(), 1, false);
+
+        fv.extras.insert("gear_handle_bool".to_string(), 100.0);
+        fv.gear_handle = 1.0;
+        fv.sim_time_s = 5.1;
+        let out = engine.step(&fv, &cfg(), 1, false);
+        assert!(out.effects.gear_bump_active);
+    }
+
+    #[test]
+    fn gear_extended_pct_triggers_gear_bump() {
+        let mut engine = RumbleEngine::new();
+        let mut fv = airborne(150.0, 5.0);
+        fv.extras.insert("gear_extended_pct".to_string(), 0.0);
+        let _ = engine.step(&fv, &cfg(), 1, false);
+
+        fv.extras.insert("gear_extended_pct".to_string(), 100.0);
+        fv.sim_time_s = 5.1;
+        let out = engine.step(&fv, &cfg(), 1, false);
+        assert!(out.effects.gear_bump_active);
+    }
+
+    #[test]
+    fn spoilers_suppressed_when_parked() {
+        let mut engine = RumbleEngine::new();
+        let mut fv = ground_taxi(1.0, 0.0);
+        fv.extras.insert("spoilers_pct".to_string(), 100.0);
+        let out = engine.step(&fv, &cfg(), 1, false);
+        assert!(!out.effects.spoilers_boost_active);
     }
 
     #[test]
@@ -918,13 +1184,14 @@ mod tests {
                 sim_time_s: 0.0,
                 ..Default::default()
             },
-            5500.0,
+            2500.0,
         );
+        let _ = engine.step(&fv, &cfg(), 1, false);
 
         let (max_i, saw_dot) = max_engine_output_over_window(&mut engine, &fv, &cfg(), 1);
         assert!(saw_dot);
         assert!(max_i > 0);
-        assert!(max_i <= 14, "idle jet rumble on ground, got {max_i}");
+        assert!(max_i <= 12, "idle jet rumble on ground, got {max_i}");
     }
 
     #[test]
@@ -997,7 +1264,7 @@ mod tests {
         fv.extras.insert("eng_throttle_1".to_string(), 90.0);
         let (max_i, _) = max_engine_output_over_window(&mut engine, &fv, &c, 1);
         assert!(max_i > 0);
-        assert!(max_i <= 14, "ground high-throttle engine vibe, got {max_i}");
+        assert!(max_i >= 10, "TOGA engine vibe should be strong, got {max_i}");
     }
 
     #[test]

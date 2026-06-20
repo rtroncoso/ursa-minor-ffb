@@ -9,7 +9,10 @@ use crate::hid::protocol::SidestickVariant;
 use crate::RumbleConfig;
 
 mod simvars;
-pub use simvars::{canonical_extras_for, CORE_SIMVARS, CORE_SIMVAR_COUNT};
+pub use simvars::{
+    canonical_extras_for, is_engine_extra_key, CORE_SIMVARS,
+    CORE_SIMVAR_COUNT,
+};
 
 pub const SIMCONNECT_UNUSED_DATUM: u32 = 0xFFFF_FFFF;
 
@@ -89,7 +92,7 @@ impl PresetKind {
                 rumble.stall_ceiling = 160.0;
                 rumble.bank = 45.0;
                 rumble.spoilers = 28.0;
-                rumble.engine_vibe = 14.0;
+                rumble.engine_vibe = 16.0;
                 rumble.engine_idle_n1_pct = 22.0;
                 rumble.eng_rpm_spool_min = 800.0;
                 rumble.eng_rpm_startup_max = 900.0;
@@ -100,7 +103,7 @@ impl PresetKind {
                 rumble.taxi_end_kn = 18.0;
                 rumble.ias_deadband_kn = 1.0;
                 rumble.flaps_bump_duration_s = 1.0;
-                rumble.gear_bump_duration_s = 0.8;
+                rumble.gear_bump_duration_s = 0.45;
             }
             PresetKind::Fighter => {
                 rumble.base_airspeed = 24.0;
@@ -110,7 +113,7 @@ impl PresetKind {
                 rumble.stall_ceiling = 210.0;
                 rumble.bank = 115.0;
                 rumble.spoilers = 35.0;
-                rumble.engine_vibe = 12.0;
+                rumble.engine_vibe = 14.0;
                 rumble.engine_idle_n1_pct = 58.0;
                 rumble.eng_rpm_spool_min = 600.0;
                 rumble.eng_rpm_startup_max = 900.0;
@@ -219,7 +222,6 @@ pub enum LayoutField {
     SimTime,
     GroundSpeed,
     Paused,
-    VerticalSpeed,
     Extra(String),
 }
 
@@ -236,12 +238,8 @@ fn core_layout_fields() -> [LayoutField; CORE_SIMVAR_COUNT] {
         LayoutField::FlapsLeftPct,
         LayoutField::FlapsRightPct,
         LayoutField::FlapsIndex,
-        LayoutField::GearHandle,
-        LayoutField::StallWarning,
         LayoutField::SimTime,
-        LayoutField::GroundSpeed,
         LayoutField::Paused,
-        LayoutField::VerticalSpeed,
     ]
 }
 
@@ -274,15 +272,28 @@ impl SimVarLayout {
     }
 }
 
+/// On-disk preset: slider values only. SimConnect simvars stay in code defaults.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct PresetFile {
+    pub kind: PresetKind,
+    pub rumble: RumbleConfig,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Preset {
     pub kind: PresetKind,
     pub rumble: RumbleConfig,
-    #[serde(default)]
     pub simvars: SimVarProfile,
 }
 
 impl Preset {
+    fn to_file(&self) -> PresetFile {
+        PresetFile {
+            kind: self.kind,
+            rumble: self.rumble.clone(),
+        }
+    }
+
     pub fn layout(&self) -> SimVarLayout {
         self.simvars.layout()
     }
@@ -391,21 +402,26 @@ impl PresetStore {
             return default;
         }
 
-        let from_disk = fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| serde_yaml::from_str::<Preset>(&text).ok());
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(_) => return default,
+        };
+
+        let from_disk = serde_yaml::from_str::<PresetFile>(&text).ok();
 
         let Some(from_disk) = from_disk else {
             return default;
         };
 
-        let mut preset = default.clone();
+        let mut preset = default;
         preset.rumble = from_disk.rumble;
-        preset.merge_rumble_from(&default);
-        preset
-            .simvars
-            .merge_from_disk(&from_disk.simvars, &default.simvars);
+        preset.merge_rumble_from(&kind.built_in_default());
         preset.kind = kind;
+
+        if text.contains("simvars:") {
+            let _ = self.write_preset_file(kind, &preset);
+        }
+
         preset
     }
 
@@ -416,9 +432,9 @@ impl PresetStore {
 
     fn write_preset_file(&self, kind: PresetKind, preset: &Preset) -> std::io::Result<()> {
         let path = self.preset_path(kind);
-        let mut to_write = preset.clone();
-        to_write.kind = kind;
-        let text = serde_yaml::to_string(&to_write)
+        let mut file = preset.to_file();
+        file.kind = kind;
+        let text = serde_yaml::to_string(&file)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         fs::write(path, text)
     }
@@ -525,9 +541,9 @@ mod tests {
         let com = PresetKind::Commercial.built_in_default();
         let ftr = PresetKind::Fighter.built_in_default();
         assert_ne!(ga.rumble.base_airspeed, ftr.rumble.base_airspeed);
-        assert_eq!(com.simvars.extra.len(), 13);
-        assert_eq!(ga.simvars.extra.len(), 11);
-        assert_eq!(ftr.simvars.extra.len(), 9);
+        assert_eq!(com.simvars.extra.len(), 20);
+        assert_eq!(ga.simvars.extra.len(), 17);
+        assert_eq!(ftr.simvars.extra.len(), 15);
     }
 
     #[test]
@@ -544,26 +560,48 @@ mod tests {
     }
 
     #[test]
-    fn load_merges_missing_engine_simvars_from_default() {
+    fn load_ignores_legacy_disk_simvars() {
         let dir = std::env::temp_dir().join(format!("ursa-merge-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let store = PresetStore::new(dir.clone());
         store.bootstrap().unwrap();
 
-        let mut old = PresetKind::Commercial.built_in_default();
-        old.simvars.extra.retain(|d| d.key == "spoilers_pct");
-        store.save(&old).unwrap();
+        let mut saved = PresetKind::Commercial.built_in_default();
+        saved.rumble.base_airspeed = 42.0;
+        saved.simvars.extra.retain(|d| d.key == "spoilers_pct");
+        store.save(&saved).unwrap();
+
+        let text = fs::read_to_string(dir.join("commercial.yml")).unwrap();
+        assert!(!text.contains("simvars:"));
 
         let loaded = store.load(PresetKind::Commercial);
-        assert_eq!(loaded.simvars.extra.len(), 13);
+        assert_eq!(loaded.rumble.base_airspeed, 42.0);
+        assert_eq!(loaded.simvars.extra.len(), 20);
         assert!(loaded.simvars.extra.iter().any(|d| d.key == "eng_rpm_1"));
-        let throttle = loaded
-            .simvars
-            .extra
-            .iter()
-            .find(|d| d.key == "eng_throttle_1")
-            .unwrap();
-        assert_eq!(throttle.name, "GENERAL ENG THROTTLE LEVER POSITION");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_reads_rumble_from_legacy_yaml_with_simvars() {
+        let dir = std::env::temp_dir().join(format!("ursa-legacy-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let mut legacy = PresetKind::Commercial.built_in_default();
+        legacy.rumble.base_airspeed = 77.0;
+        let mut yaml = serde_yaml::to_string(&legacy.to_file()).unwrap();
+        yaml.push_str("simvars:\n  extra:\n  - name: SPOILERS\n    unit: Percent\n    key: spoilers_pct\n");
+
+        fs::write(dir.join("commercial.yml"), yaml).unwrap();
+
+        let store = PresetStore::new(dir.clone());
+        let loaded = store.load(PresetKind::Commercial);
+        assert_eq!(loaded.rumble.base_airspeed, 77.0);
+        assert_eq!(loaded.simvars, PresetKind::Commercial.built_in_default().simvars);
+
+        let rewritten = fs::read_to_string(dir.join("commercial.yml")).unwrap();
+        assert!(!rewritten.contains("simvars:"));
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -576,11 +614,11 @@ mod tests {
             PresetKind::Fighter,
         ] {
             let preset = kind.built_in_default();
-            let yaml = serde_yaml::to_string(&preset).unwrap();
-            let parsed: Preset = serde_yaml::from_str(&yaml).unwrap();
+            let yaml = serde_yaml::to_string(&preset.to_file()).unwrap();
+            assert!(!yaml.contains("simvars:"));
+            let parsed: PresetFile = serde_yaml::from_str(&yaml).unwrap();
             assert_eq!(parsed.kind, kind);
             assert_eq!(parsed.rumble, preset.rumble);
-            assert_eq!(parsed.simvars, preset.simvars);
         }
     }
 
@@ -606,20 +644,27 @@ mod tests {
     }
 
     #[test]
-    fn load_preserves_saved_simvar_order() {
+    fn save_writes_rumble_only() {
         let dir = std::env::temp_dir().join(format!("ursa-order-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let store = PresetStore::new(dir.clone());
         store.bootstrap().unwrap();
 
-        let mut scrambled = PresetKind::GeneralAviation.built_in_default();
-        scrambled.simvars.extra.swap(0, 1);
-        store.save(&scrambled).unwrap();
+        let mut preset = PresetKind::GeneralAviation.built_in_default();
+        preset.rumble.base_airspeed = 33.0;
+        preset.simvars.extra.swap(0, 1);
+        store.save(&preset).unwrap();
+
+        let text = fs::read_to_string(dir.join("general_aviation.yml")).unwrap();
+        assert!(!text.contains("simvars:"));
+        assert!(text.contains("base_airspeed: 33"));
 
         let loaded = store.load(PresetKind::GeneralAviation);
-        assert_eq!(loaded.simvars.extra[0].key, scrambled.simvars.extra[0].key);
-        assert_eq!(loaded.simvars.extra[1].key, scrambled.simvars.extra[1].key);
-        assert!(loaded.simvars.extra.iter().any(|d| d.key == "eng_rpm_1"));
+        assert_eq!(loaded.rumble.base_airspeed, 33.0);
+        assert_eq!(
+            loaded.simvars.extra,
+            PresetKind::GeneralAviation.built_in_default().simvars.extra
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

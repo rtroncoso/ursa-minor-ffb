@@ -695,9 +695,8 @@ impl eframe::App for UiState {
 
                             ui.horizontal(|ui| {
                                 ui.with_layout(
-                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
-                                        ui.label(RichText::new("Sidestick").strong());
                                         let current_variant = self.sidestick_variant;
                                         egui::ComboBox::from_id_source("sidestick_variant")
                                             .selected_text(current_variant.label())
@@ -714,6 +713,7 @@ impl eframe::App for UiState {
                                                     }
                                                 }
                                             });
+                                        ui.label(RichText::new("Sidestick").strong());
                                     },
                                 );
                             });
@@ -861,7 +861,7 @@ impl eframe::App for UiState {
                     );
                     UiState::effect_row(
                         ui,
-                        "Stall ceiling",
+                        "Stall",
                         &mut cfg.stall_ceiling,
                         0.0..=255.0,
                         self.effects.stall_active.load(Ordering::Relaxed),

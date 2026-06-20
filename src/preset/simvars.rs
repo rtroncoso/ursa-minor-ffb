@@ -1,8 +1,18 @@
 //! Canonical SimConnect simvar names and units (MSFS SDK spelling).
-//! Code provides defaults; saved YAML overrides with fallback for new keys from updates.
+//! Code provides per-preset defaults; preset YAML on disk stores rumble sliders only.
 use super::{PresetKind, SimVarDef, SimVarProfile, SIMCONNECT_UNUSED_DATUM};
 
-pub const OBSOLETE_EXTRA_KEYS: &[&str] = &["recip_mag_l", "recip_mag_r", "prop_rpm_1"];
+pub const OBSOLETE_EXTRA_KEYS: &[&str] = &[
+    "recip_mag_l",
+    "recip_mag_r",
+    "prop_rpm_1",
+    "overspeed",
+    "airspeed_barber_pole",
+    "design_speed_vne",
+    "design_speed_vc",
+    "mach_limit",
+    "indicated_mach",
+];
 
 /// Core simvars registered for every preset (order is the SimConnect packet layout).
 /// Wind lives in the extras packet so speed/direction cannot shift when a core field fails to register.
@@ -13,20 +23,25 @@ pub const CORE_SIMVARS: &[(&str, &str)] = &[
     ("TRAILING EDGE FLAPS LEFT PERCENT", "Percent"),
     ("TRAILING EDGE FLAPS RIGHT PERCENT", "Percent"),
     ("FLAPS HANDLE INDEX", "Number"),
-    ("GEAR HANDLE POSITION", "Bool"),
-    ("STALL WARNING", "Bool"),
     ("ABSOLUTE TIME", "Seconds"),
-    ("GROUND VELOCITY", "Knots"),
     ("PAUSED", "Bool"),
-    ("VERTICAL SPEED", "Feet per minute"),
 ];
 
 pub const CORE_SIMVAR_COUNT: usize = CORE_SIMVARS.len();
 
+/// Keys registered on the isolated engine SimConnect packet (order must match `canonical_extras_for`).
+pub fn is_engine_extra_key(key: &str) -> bool {
+    key == "num_engines"
+        || key.starts_with("eng_max_rated_rpm_")
+        || key.starts_with("eng_pct_max_rpm_")
+        || key.starts_with("eng_rpm_")
+        || key.starts_with("eng_n1_")
+        || key.starts_with("eng_n2_")
+        || key.starts_with("eng_throttle_")
+}
+
 pub fn canonical_extras_for(kind: PresetKind) -> SimVarProfile {
     let mut simvars = SimVarProfile::default();
-    push_spoilers_extra(&mut simvars);
-    push_wind_extras(&mut simvars);
     match kind {
         PresetKind::GeneralAviation => {
             push_aircraft_engine_extras(&mut simvars, true, false);
@@ -34,11 +49,15 @@ pub fn canonical_extras_for(kind: PresetKind) -> SimVarProfile {
         PresetKind::Commercial => {
             push_aircraft_engine_extras(&mut simvars, true, true);
             push_extra(&mut simvars, "TURB ENG N2", "Percent", "eng_n2_1", 1);
+            push_extra(&mut simvars, "TURB ENG N2", "Percent", "eng_n2_2", 2);
         }
         PresetKind::Fighter => {
             push_aircraft_engine_extras(&mut simvars, false, true);
         }
     }
+    push_spoilers_extra(&mut simvars);
+    push_motion_extras(&mut simvars);
+    push_wind_extras(&mut simvars);
     simvars
 }
 
@@ -55,6 +74,51 @@ fn push_wind_extras(simvars: &mut SimVarProfile) {
         "AMBIENT WIND DIRECTION",
         "Degrees",
         "wind_dir_deg",
+        SIMCONNECT_UNUSED_DATUM,
+    );
+}
+
+fn push_motion_extras(simvars: &mut SimVarProfile) {
+    push_extra(
+        simvars,
+        "VERTICAL SPEED",
+        "Feet per minute",
+        "vertical_speed_fpm",
+        SIMCONNECT_UNUSED_DATUM,
+    );
+    push_extra(
+        simvars,
+        "GROUND VELOCITY",
+        "Knots",
+        "ground_speed_kt",
+        SIMCONNECT_UNUSED_DATUM,
+    );
+    push_extra(
+        simvars,
+        "SURFACE RELATIVE GROUND SPEED",
+        "Knots",
+        "surface_ground_speed_kt",
+        SIMCONNECT_UNUSED_DATUM,
+    );
+    push_extra(
+        simvars,
+        "STALL WARNING",
+        "Bool",
+        "stall_warning",
+        SIMCONNECT_UNUSED_DATUM,
+    );
+    push_extra(
+        simvars,
+        "GEAR HANDLE POSITION",
+        "Bool",
+        "gear_handle_bool",
+        SIMCONNECT_UNUSED_DATUM,
+    );
+    push_extra(
+        simvars,
+        "GEAR TOTAL PCT EXTENDED",
+        "Percent",
+        "gear_extended_pct",
         SIMCONNECT_UNUSED_DATUM,
     );
 }
@@ -132,28 +196,6 @@ fn push_extra(simvars: &mut SimVarProfile, name: &str, unit: &str, key: &str, da
 }
 
 impl SimVarProfile {
-    /// Disk extras override code defaults; new canonical keys from updates are appended.
-    pub fn merge_from_disk(&mut self, disk: &SimVarProfile, canonical: &SimVarProfile) {
-        let mut disk_extras: Vec<SimVarDef> = disk
-            .extra
-            .iter()
-            .filter(|d| !OBSOLETE_EXTRA_KEYS.contains(&d.key.as_str()))
-            .cloned()
-            .collect();
-        for def in &mut disk_extras {
-            def.normalize_datum_suffix();
-        }
-
-        let disk_keys: std::collections::HashSet<String> =
-            disk_extras.iter().map(|d| d.key.clone()).collect();
-        for def in &canonical.extra {
-            if !disk_keys.contains(&def.key) {
-                disk_extras.push(def.clone());
-            }
-        }
-        self.extra = disk_extras;
-    }
-
     /// Replace extras with the canonical built-in list (order, names, units). User rumble sliders are untouched.
     pub fn apply_canonical_extras(&mut self, canonical: &SimVarProfile) {
         self.extra = canonical.extra.clone();

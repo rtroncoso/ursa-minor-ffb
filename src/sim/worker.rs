@@ -11,7 +11,10 @@ use crossbeam_channel::Sender;
 use libloading::Library;
 use parking_lot::Mutex;
 
-use crate::preset::{PresetShared, SimVarLayout, SimVarProfile, CORE_SIMVARS, CORE_SIMVAR_COUNT};
+use crate::preset::{
+    is_engine_extra_key, PresetShared, SimVarLayout, SimVarProfile,
+    CORE_SIMVARS, CORE_SIMVAR_COUNT,
+};
 use crate::rumble::RumbleEngine;
 use crate::sim::parse::{
     finalize_flight_vars, flight_status, merge_extras, parse_extra_elems, parse_main_elems,
@@ -73,6 +76,8 @@ const EVT_FRAME: DWord = 1003;
 
 const DEF_CORE: DWord = 2001;
 const REQ_CORE: DWord = 3001;
+const DEF_ENGINE: DWord = 2003;
+const REQ_ENGINE: DWord = 3003;
 const DEF_EXTRAS: DWord = 2002;
 const REQ_EXTRAS: DWord = 3002;
 const DEF_PING: DWord = 2101;
@@ -276,8 +281,10 @@ pub fn sim_worker(
 
             let core_fields = SimVarLayout::core_only().fields;
             let mut session_core_layout = SimVarLayout { fields: Vec::new() };
+            let mut session_engine_keys: Vec<String> = Vec::new();
             let mut session_extra_keys: Vec<String> = Vec::new();
             let mut core_registered = 0usize;
+            let mut engine_registered = 0usize;
             let mut extras_registered = 0usize;
 
             for (i, (name, unit)) in CORE_SIMVARS.iter().enumerate() {
@@ -298,7 +305,12 @@ pub fn sim_worker(
 
             for def in &session_simvars.extra {
                 let reg_name = SimVarProfile::simconnect_datum_name(&def.name, def.datum_index);
-                let hr = add(DEF_EXTRAS, &reg_name, &def.unit, SIMCONNECT_UNUSED);
+                let def_id = if is_engine_extra_key(&def.key) {
+                    DEF_ENGINE
+                } else {
+                    DEF_EXTRAS
+                };
+                let hr = add(def_id, &reg_name, &def.unit, SIMCONNECT_UNUSED);
                 if hr < 0 {
                     logs.push(format!(
                         "SimConnect: extra {} {:?} → {:?} FAILED {}",
@@ -309,8 +321,13 @@ pub fn sim_worker(
                     ));
                     continue;
                 }
-                extras_registered += 1;
-                session_extra_keys.push(def.key.clone());
+                if is_engine_extra_key(&def.key) {
+                    engine_registered += 1;
+                    session_engine_keys.push(def.key.clone());
+                } else {
+                    extras_registered += 1;
+                    session_extra_keys.push(def.key.clone());
+                }
                 logs.push(format!(
                     "SimConnect: extra {} → {} [{}]",
                     def.key, reg_name, def.unit
@@ -318,8 +335,9 @@ pub fn sim_worker(
             }
 
             logs.push(format!(
-                "SimConnect: DEF_CORE {core_registered}/{core_field_count}, DEF_EXTRAS {extras_registered}/{}",
-                session_simvars.extra.len()
+                "SimConnect: DEF_CORE {core_registered}/{core_field_count}, DEF_ENGINE {engine_registered}/{}, DEF_EXTRAS {extras_registered}/{}",
+                session_engine_keys.len(),
+                session_extra_keys.len()
             ));
 
             {
@@ -377,6 +395,19 @@ pub fn sim_worker(
                 0,
                 0,
             );
+            if !session_engine_keys.is_empty() {
+                let _ = (fns.req_data)(
+                    h_sc,
+                    REQ_ENGINE,
+                    DEF_ENGINE,
+                    USER_OBJECT_ID,
+                    SIMCONNECT_PERIOD_SIM_FRAME,
+                    0,
+                    0,
+                    0,
+                    0,
+                );
+            }
             if !session_extra_keys.is_empty() {
                 let _ = (fns.req_data)(
                     h_sc,
@@ -402,6 +433,19 @@ pub fn sim_worker(
                 0,
                 0,
             );
+            if !session_engine_keys.is_empty() {
+                let _ = (fns.req_data)(
+                    h_sc,
+                    REQ_ENGINE,
+                    DEF_ENGINE,
+                    USER_OBJECT_ID,
+                    SIMCONNECT_PERIOD_SIM_FRAME,
+                    0,
+                    0,
+                    0,
+                    0,
+                );
+            }
             if !session_extra_keys.is_empty() {
                 let _ = (fns.req_data)(
                     h_sc,
@@ -427,12 +471,13 @@ pub fn sim_worker(
                 0,
             );
 
-            let mut latest_extras = std::collections::HashMap::new();
+            let mut latest_engine_extras = std::collections::HashMap::new();
+            let mut latest_other_extras = std::collections::HashMap::new();
             let mut core_fv_base: Option<FlightVars> = None;
             let mut main_seen = false;
             let mut last_main_rx = Instant::now();
 
-            let mut simvar_count_warned = false;
+            let mut simvar_mismatch_logged = std::collections::HashSet::new();
             let mut last_rumble_log = Instant::now();
             let mut last_logged_intensity: u8 = 255;
             let mut main_frame_count: u64 = 0;
@@ -490,7 +535,10 @@ pub fn sim_worker(
                                 continue;
                             }
 
-                            if sod.dw_request_id == REQ_CORE || sod.dw_request_id == REQ_EXTRAS {
+                            if sod.dw_request_id == REQ_CORE
+                                || sod.dw_request_id == REQ_EXTRAS
+                                || sod.dw_request_id == REQ_ENGINE
+                            {
                                 main_seen = true;
                                 last_main_rx = Instant::now();
                                 if sod.dw_request_id == REQ_CORE {
@@ -502,22 +550,37 @@ pub fn sim_worker(
                                     continue;
                                 }
 
-                                let (expected, max_elem_count) = if sod.dw_request_id == REQ_CORE {
-                                    (session_core_layout.total_count(), core_field_count)
-                                } else {
-                                    (session_extra_keys.len(), session_extra_keys.len())
-                                };
+                                let (packet_name, expected, max_elem_count, keys) =
+                                    if sod.dw_request_id == REQ_CORE {
+                                        (
+                                            "DEF_CORE",
+                                            session_core_layout.total_count(),
+                                            core_field_count,
+                                            None,
+                                        )
+                                    } else if sod.dw_request_id == REQ_ENGINE {
+                                        (
+                                            "DEF_ENGINE",
+                                            session_engine_keys.len(),
+                                            session_engine_keys.len(),
+                                            Some(&session_engine_keys),
+                                        )
+                                    } else {
+                                        (
+                                            "DEF_EXTRAS",
+                                            session_extra_keys.len(),
+                                            session_extra_keys.len(),
+                                            Some(&session_extra_keys),
+                                        )
+                                    };
 
-                                if count != expected && !simvar_count_warned {
+                                if count != expected
+                                    && !simvar_mismatch_logged.contains(packet_name)
+                                {
                                     logs.push(format!(
-                                        "SimConnect: {:?} count mismatch (got {count}, expected {expected})",
-                                        if sod.dw_request_id == REQ_CORE {
-                                            "DEF_CORE"
-                                        } else {
-                                            "DEF_EXTRAS"
-                                        }
+                                        "SimConnect: {packet_name} count mismatch (got {count}, expected {expected}) — parsing first {count} fields"
                                     ));
-                                    simvar_count_warned = true;
+                                    simvar_mismatch_logged.insert(packet_name);
                                 }
 
                                 let want_f64 = payload_len >= count * 8;
@@ -545,14 +608,42 @@ pub fn sim_worker(
                                     }
                                 }
 
-                                if sod.dw_request_id == REQ_EXTRAS {
-                                    let field_count = count.min(session_extra_keys.len());
-                                    latest_extras = parse_extra_elems(
+                                if sod.dw_request_id == REQ_ENGINE {
+                                    let keys = keys.expect("engine keys");
+                                    let field_count = count.min(keys.len());
+                                    latest_engine_extras = parse_extra_elems(
                                         &elem[..field_count],
-                                        &session_extra_keys[..field_count],
+                                        &keys[..field_count],
                                     );
                                     if let Some(mut fv) = core_fv_base.clone() {
-                                        merge_extras(&mut fv, &latest_extras);
+                                        merge_extras(&mut fv, &latest_engine_extras);
+                                        merge_extras(&mut fv, &latest_other_extras);
+                                        finalize_flight_vars(&mut fv);
+                                        let cfg_now = preset.rumble_config();
+                                        *status.lock() = flight_status(&fv);
+                                        let out = rumble_engine.step(
+                                            &fv,
+                                            &cfg_now,
+                                            preset.current_rev(),
+                                            hold.load(Ordering::Relaxed),
+                                        );
+                                        effects.apply_snapshot(&out.effects);
+                                        *last_vars.lock() = Some(fv);
+                                        let _ = tx_hid.send(HidCmd::SendIntensity(out.intensity));
+                                    }
+                                    continue;
+                                }
+
+                                if sod.dw_request_id == REQ_EXTRAS {
+                                    let keys = keys.expect("extras keys");
+                                    let field_count = count.min(keys.len());
+                                    latest_other_extras = parse_extra_elems(
+                                        &elem[..field_count],
+                                        &keys[..field_count],
+                                    );
+                                    if let Some(mut fv) = core_fv_base.clone() {
+                                        merge_extras(&mut fv, &latest_engine_extras);
+                                        merge_extras(&mut fv, &latest_other_extras);
                                         finalize_flight_vars(&mut fv);
                                         let cfg_now = preset.rumble_config();
                                         *status.lock() = flight_status(&fv);
@@ -582,7 +673,8 @@ pub fn sim_worker(
                                     cfg_now.ias_deadband_kn,
                                 );
                                 core_fv_base = Some(fv.clone());
-                                merge_extras(&mut fv, &latest_extras);
+                                merge_extras(&mut fv, &latest_engine_extras);
+                                merge_extras(&mut fv, &latest_other_extras);
                                 finalize_flight_vars(&mut fv);
 
                                 *status.lock() = flight_status(&fv);
@@ -666,6 +758,19 @@ pub fn sim_worker(
                         0,
                         0,
                     );
+                    if !session_engine_keys.is_empty() {
+                        let _ = (fns.req_data)(
+                            h_sc,
+                            REQ_ENGINE,
+                            DEF_ENGINE,
+                            USER_OBJECT_ID,
+                            SIMCONNECT_PERIOD_SIM_FRAME,
+                            0,
+                            0,
+                            0,
+                            0,
+                        );
+                    }
                     if !session_extra_keys.is_empty() {
                         let _ = (fns.req_data)(
                             h_sc,
