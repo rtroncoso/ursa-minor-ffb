@@ -1,6 +1,6 @@
 [package]
 name = "ursa_minor_ffb"
-version = "2.0.1"
+version = "3.0.0"
 edition = "2021"
 build = "src/build.rs"
 

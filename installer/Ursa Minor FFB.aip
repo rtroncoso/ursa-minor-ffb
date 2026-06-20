@@ -13,7 +13,7 @@
     <ROW Property="ProductCode" Value="1033:{D5C2D3B9-C4F5-4557-B4C1-741DB5D09D88} " Type="16"/>
     <ROW Property="ProductLanguage" Value="1033"/>
     <ROW Property="ProductName" Value="Ursa Minor FFB"/>
-    <ROW Property="ProductVersion" Value="2.0.1" Options="32"/>
+    <ROW Property="ProductVersion" Value="3.0.0" Options="32"/>
     <ROW Property="SecureCustomProperties" Value="OLDPRODUCTS;AI_NEWERPRODUCTFOUND"/>
     <ROW Property="UpgradeCode" Value="{316C59E5-5DC0-4888-8216-382403C2A593}"/>
     <ROW Property="WindowsType9X" MultiBuildValue="DefaultBuild:Windows 9x/ME" ValueLocId="-"/>

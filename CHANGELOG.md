@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.0.0
+
+- Fixes HID payload for all URSA MINOR sidestick variants
+- Improve rumble effects, adds spoiler + engine vibrations
+- Adds profiles, presets and persistence to disk
+- MSI Installer with GH Actions integration
+- General improvements to UI/UX
+
 ## v2.0.0
 
 - Fixes HID payload for URSA MINOR R version
