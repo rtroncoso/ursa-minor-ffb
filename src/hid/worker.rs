@@ -283,8 +283,7 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
                     hold = x;
                     logs.push(format!("HID: cmd SetHold({hold})"));
                     if hold {
-                        let (_ok, _fail) =
-                            hid_send_out(&devices, current_variant, 0, &logs);
+                        let (_ok, _fail) = hid_send_out(&devices, current_variant, 0, &logs);
                         last_sent_intensity = 0;
                     }
                 }

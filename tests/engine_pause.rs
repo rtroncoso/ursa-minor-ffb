@@ -21,8 +21,8 @@ fn parked_core_elems(paused_simvar: f64) -> [f64; 8] {
         1.0, // on ground
         0.0, // bank
         0.0,
-        0.0, // flaps
-        0.0, // flaps idx
+        0.0,  // flaps
+        0.0,  // flaps idx
         10.0, // sim time
         paused_simvar,
     ]

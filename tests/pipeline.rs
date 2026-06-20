@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use ursa_minor_ffb::hid::protocol::{build_simapp_vibe_frame, SidestickVariant, WW_PID_URSA_MINOR_AIRBUS_L};
+use ursa_minor_ffb::hid::protocol::{
+    build_simapp_vibe_frame, SidestickVariant, WW_PID_URSA_MINOR_AIRBUS_L,
+};
 use ursa_minor_ffb::rumble::RumbleEngine;
 use ursa_minor_ffb::sim::parse::{flight_status, merge_extras, parse_main_elems};
 use ursa_minor_ffb::{FlightVars, PresetKind, PresetShared, RumbleConfig, SimStatus, SimVarLayout};
@@ -26,7 +28,9 @@ fn elems_from_flight(
     sim_time: f64,
     paused: f64,
 ) -> [f64; 8] {
-    [ias, on_ground, bank, flaps_l, flaps_r, flaps_idx, sim_time, paused]
+    [
+        ias, on_ground, bank, flaps_l, flaps_r, flaps_idx, sim_time, paused,
+    ]
 }
 
 fn motion_extras(gs: f64, gear: f64, stalled: f64) -> HashMap<String, f64> {
@@ -189,7 +193,10 @@ fn pipeline_frame_encoding_matches_intensity_at_each_step() {
 
     for (i, elems) in steps.iter().enumerate() {
         let mut fv = parse_main_elems(elems, &layout, false, cfg.ias_deadband_kn);
-        merge_extras(&mut fv, &motion_extras(if i == 0 { 6.0 } else { 0.0 }, 1.0, 0.0));
+        merge_extras(
+            &mut fv,
+            &motion_extras(if i == 0 { 6.0 } else { 0.0 }, 1.0, 0.0),
+        );
         if i == 1 {
             let mut extras = motion_extras(0.0, 0.0, 0.0);
             extras.insert("wind_kt".to_string(), 20.0);

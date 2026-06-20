@@ -12,8 +12,7 @@ use libloading::Library;
 use parking_lot::Mutex;
 
 use crate::preset::{
-    is_engine_extra_key, PresetShared, SimVarLayout, SimVarProfile,
-    CORE_SIMVARS, CORE_SIMVAR_COUNT,
+    is_engine_extra_key, PresetShared, SimVarLayout, SimVarProfile, CORE_SIMVARS, CORE_SIMVAR_COUNT,
 };
 use crate::rumble::RumbleEngine;
 use crate::sim::parse::{
@@ -22,7 +21,7 @@ use crate::sim::parse::{
 use crate::{EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus};
 
 type DWord = u32;
-type HRESULT = i32;
+type Hresult = i32;
 type Handle = *mut c_void;
 type HWnd = *mut c_void;
 
@@ -86,8 +85,8 @@ const DEF_TITLE: DWord = 2201;
 const REQ_TITLE: DWord = 3201;
 
 type PfnSimConnectOpen =
-    unsafe extern "system" fn(*mut Handle, *const c_char, HWnd, DWord, Handle, DWord) -> HRESULT;
-type PfnSimConnectClose = unsafe extern "system" fn(Handle) -> HRESULT;
+    unsafe extern "system" fn(*mut Handle, *const c_char, HWnd, DWord, Handle, DWord) -> Hresult;
+type PfnSimConnectClose = unsafe extern "system" fn(Handle) -> Hresult;
 type PfnSimConnectAddToDataDefinition = unsafe extern "system" fn(
     Handle,
     DWord,
@@ -96,7 +95,7 @@ type PfnSimConnectAddToDataDefinition = unsafe extern "system" fn(
     DWord,
     f32,
     DWord,
-) -> HRESULT;
+) -> Hresult;
 type PfnSimConnectRequestDataOnSimObject = unsafe extern "system" fn(
     Handle,
     DWord,
@@ -107,14 +106,14 @@ type PfnSimConnectRequestDataOnSimObject = unsafe extern "system" fn(
     DWord,
     DWord,
     DWord,
-) -> HRESULT;
+) -> Hresult;
 type PfnSimConnectGetNextDispatch =
-    unsafe extern "system" fn(Handle, *mut *mut SimRecv, *mut DWord) -> HRESULT;
+    unsafe extern "system" fn(Handle, *mut *mut SimRecv, *mut DWord) -> Hresult;
 type PfnSimConnectSubscribeToSystemEvent =
-    unsafe extern "system" fn(Handle, DWord, *const c_char) -> HRESULT;
+    unsafe extern "system" fn(Handle, DWord, *const c_char) -> Hresult;
 
 #[inline]
-fn hr_hex(hr: HRESULT) -> String {
+fn hr_hex(hr: Hresult) -> String {
     format!("0x{:08X}", hr as u32)
 }
 
@@ -198,6 +197,7 @@ fn load_simconnect(logs: &LogBuffer) -> Result<SimConnectFns> {
     bind_simconnect(lib)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn sim_worker(
     last_vars: Arc<Mutex<Option<FlightVars>>>,
     tx_hid: Sender<HidCmd>,
@@ -265,7 +265,7 @@ pub fn sim_worker(
                 logs.push("SimConnect: event subscriptions active.".to_string());
             }
 
-            let add = |def_id: DWord, name_s: &str, unit_s: &str, datum_id: DWord| -> HRESULT {
+            let add = |def_id: DWord, name_s: &str, unit_s: &str, datum_id: DWord| -> Hresult {
                 let n = std::ffi::CString::new(name_s).unwrap();
                 let u = std::ffi::CString::new(unit_s).unwrap();
                 (fns.add_to_def)(

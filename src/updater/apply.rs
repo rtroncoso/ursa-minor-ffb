@@ -61,8 +61,8 @@ fn wait_for_process_exit(pid: u32) -> Result<()> {
         return Ok(());
     }
     unsafe {
-        let handle = OpenProcess(PROCESS_SYNCHRONIZE, false, pid)
-            .context("OpenProcess for main app PID")?;
+        let handle =
+            OpenProcess(PROCESS_SYNCHRONIZE, false, pid).context("OpenProcess for main app PID")?;
         if handle.is_invalid() {
             return Ok(());
         }
@@ -91,8 +91,8 @@ fn wait_for_app_processes_gone() -> Result<()> {
 
 fn any_target_running(targets: &[&str]) -> Result<bool> {
     unsafe {
-        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
-            .context("CreateToolhelp32Snapshot")?;
+        let snap =
+            CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).context("CreateToolhelp32Snapshot")?;
         if snap == HANDLE::default() {
             bail!("CreateToolhelp32Snapshot returned invalid handle");
         }

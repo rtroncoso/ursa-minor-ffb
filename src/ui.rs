@@ -1,5 +1,10 @@
 use egui::{Color32, RichText, Vec2};
 
+use crate::{
+    preset::{Preset, PresetKind, PresetShared, PresetStore},
+    tray, updater, EffectsShared, FlightVars, HidCmd, LogBuffer, SidestickVariant, SimStatus,
+    UiCmd,
+};
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use parking_lot::Mutex;
 use std::{
@@ -13,11 +18,6 @@ use std::{
 use windows::core::PCWSTR;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-use crate::{
-    preset::{Preset, PresetKind, PresetShared, PresetStore},
-    tray, updater, EffectsShared, FlightVars, HidCmd, LogBuffer, SidestickVariant, SimStatus,
-    UiCmd,
-};
 
 const TOAST_DURATION: Duration = Duration::from_secs(3);
 const TOAST_BOTTOM_MARGIN: f32 = 16.0;
@@ -161,6 +161,7 @@ struct ViewportSync {
 }
 
 impl UiState {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         controller_connected: Arc<AtomicBool>,
         status: Arc<Mutex<SimStatus>>,
@@ -209,10 +210,7 @@ impl UiState {
 
         match v {
             Some(v) => {
-                fields.push((
-                    "Airspeed (kt)",
-                    format!("{:.1}", v.airspeed_indicated),
-                ));
+                fields.push(("Airspeed (kt)", format!("{:.1}", v.airspeed_indicated)));
                 fields.push(("GS (kt)", format!("{:.1}", v.ground_speed_kt)));
                 fields.push(("On Ground", v.on_ground.to_string()));
                 fields.push(("Bank (°)", format!("{:.1}", v.bank_deg)));
@@ -378,11 +376,15 @@ impl UiState {
         }
 
         let frame_margin = PANEL_MARGIN_V * 2.0;
-        let desired_h =
-            (top_h + content_h + frame_margin + VIEWPORT_BOTTOM_EXTRA).ceil();
+        let desired_h = (top_h + content_h + frame_margin + VIEWPORT_BOTTOM_EXTRA).ceil();
 
         let width = ctx
-            .input(|i| i.viewport().inner_rect.map(|r| r.width()).unwrap_or(WINDOW_WIDTH))
+            .input(|i| {
+                i.viewport()
+                    .inner_rect
+                    .map(|r| r.width())
+                    .unwrap_or(WINDOW_WIDTH)
+            })
             .max(WINDOW_MIN_WIDTH);
 
         if (self.viewport_sync.synced_height - desired_h).abs() < 2.0
@@ -418,9 +420,7 @@ impl UiState {
         let row_h = ui.style().spacing.interact_size.y;
         ui.horizontal(|ui| {
             ui.set_width(ui.available_width());
-            ui.add(
-                egui::Label::new(RichText::new(name).strong()).truncate(false),
-            );
+            ui.add(egui::Label::new(RichText::new(name).strong()).truncate(false));
             let (slider_w, indicator_w) = Self::rumble_slider_width(ui);
             let slider_changed = ui
                 .allocate_ui_with_layout(
@@ -484,9 +484,7 @@ impl UiState {
         let slider_range = (*range.start() as f32)..=(*range.end() as f32);
         ui.horizontal(|ui| {
             ui.set_width(ui.available_width());
-            ui.add(
-                egui::Label::new(RichText::new(name).strong()).truncate(false),
-            );
+            ui.add(egui::Label::new(RichText::new(name).strong()).truncate(false));
             let (slider_w, indicator_w) = Self::rumble_slider_width(ui);
             let slider_changed = ui
                 .allocate_ui_with_layout(
@@ -531,10 +529,7 @@ impl UiState {
                 },
             );
 
-            if slider_changed {
-                *val = tmp as f64;
-                *on_change = true;
-            } else if value_changed {
+            if slider_changed || value_changed {
                 *val = tmp as f64;
                 *on_change = true;
             }
@@ -617,7 +612,10 @@ impl UiState {
     }
 
     fn start_update(&mut self, ctx: &egui::Context, release: &updater::ReleaseInfo) {
-        let app_dir = match std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+        let app_dir = match std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        {
             Some(d) => d,
             None => {
                 self.show_toast("Could not determine application directory.", true);
@@ -659,24 +657,22 @@ impl eframe::App for UiState {
         egui::TopBottomPanel::top("top")
             .frame(top_frame)
             .show(ctx, |ui| {
-            let top_bar = ui.scope(|ui| {
-                ui.horizontal(|ui| {
-                    let st = *self.status.lock();
-                    status_badge(ui, &st);
-                    ui.separator();
-
-                    let controller_ok = self.controller_connected.load(Ordering::Relaxed);
-                    controller_badge_dot(ui, controller_ok);
-
-                    let ac = self.aircraft_title.lock().clone();
-                    if !ac.is_empty() {
+                let top_bar = ui.scope(|ui| {
+                    ui.horizontal(|ui| {
+                        let st = *self.status.lock();
+                        status_badge(ui, &st);
                         ui.separator();
-                        ui.label(RichText::new(ac).italics());
-                    }
 
-                    ui.with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
+                        let controller_ok = self.controller_connected.load(Ordering::Relaxed);
+                        controller_badge_dot(ui, controller_ok);
+
+                        let ac = self.aircraft_title.lock().clone();
+                        if !ac.is_empty() {
+                            ui.separator();
+                            ui.label(RichText::new(ac).italics());
+                        }
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.set_width(ui.available_width());
                             let holding = self.hold.load(Ordering::Relaxed);
                             if !holding {
@@ -717,24 +713,22 @@ impl eframe::App for UiState {
                                     },
                                 );
                             });
-                        },
+                        });
+                    });
+                });
+                ctx.data_mut(|d| {
+                    d.insert_temp(
+                        egui::Id::new("top_panel_height"),
+                        top_bar.response.rect.height(),
                     );
                 });
             });
-            ctx.data_mut(|d| {
-                d.insert_temp(
-                    egui::Id::new("top_panel_height"),
-                    top_bar.response.rect.height(),
-                );
-            });
-        });
 
         self.dismiss_expired_toast();
 
         {
             let mut panel_frame = egui::Frame::central_panel(&ctx.style());
-            panel_frame.inner_margin =
-                egui::Margin::symmetric(PANEL_MARGIN_H, PANEL_MARGIN_V);
+            panel_frame.inner_margin = egui::Margin::symmetric(PANEL_MARGIN_H, PANEL_MARGIN_V);
             egui::CentralPanel::default()
                 .frame(panel_frame)
                 .show(ctx, |ui| {
@@ -972,7 +966,7 @@ impl eframe::App for UiState {
                         .resizable(false)
                         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                         .show(ctx, |ui| {
-                            ui.label(format!("A new version of Ursa Minor FFB is available."));
+                            ui.label("A new version of Ursa Minor FFB is available.");
                             ui.label(format!("Current: {current}"));
                             ui.label(format!("Latest:  {latest}"));
                             ui.add_space(6.0);

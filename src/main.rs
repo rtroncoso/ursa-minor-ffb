@@ -5,17 +5,14 @@ use ursa_minor_ffb::{
     log::LogBuffer,
     preset::{PresetShared, PresetStore},
     sim::sim_worker,
-    ui::{UiState},
+    ui::UiState,
     EffectsShared, EffectsState, FlightVars, HidCmd, UiCmd,
 };
 
 use anyhow::Result;
 use crossbeam_channel::unbounded;
 use parking_lot::Mutex;
-use std::sync::{
-    atomic::AtomicBool,
-    Arc,
-};
+use std::sync::{atomic::AtomicBool, Arc};
 use std::{thread, time::Duration};
 
 fn main() -> Result<()> {

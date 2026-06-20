@@ -4,7 +4,7 @@
 use std::{env, path::PathBuf, process};
 
 use anyhow::{bail, Context, Result};
-use ursa_minor_ffb::updater::apply::{ApplyArgs, run};
+use ursa_minor_ffb::updater::apply::{run, ApplyArgs};
 
 fn main() {
     if let Err(e) = real_main() {

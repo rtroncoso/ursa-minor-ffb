@@ -158,8 +158,8 @@ unsafe extern "system" fn wnd_proc(
                         }
                         ID_TRAY_QUIT => {
                             // 1) Remove tray icon
-                            let mut nid = st.nid;
-                            let _ = Shell_NotifyIconW(NIM_DELETE, &mut nid);
+                            let nid = st.nid;
+                            let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
 
                             // 2) Ask egui to close the main window
                             st.ctx.send_viewport_cmd(ViewportCommand::Close);
@@ -183,8 +183,8 @@ unsafe extern "system" fn wnd_proc(
         WM_DESTROY => {
             if let Some(lock) = TRAY_STATE.get() {
                 let st = lock.lock().unwrap();
-                let mut nid = st.nid;
-                let _ = Shell_NotifyIconW(NIM_DELETE, &mut nid);
+                let nid = st.nid;
+                let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
             }
             // Ensure the tray thread exits its message loop
             PostQuitMessage(0);
@@ -258,7 +258,7 @@ pub fn spawn_tray_with_ctx(tx_ui: Sender<UiCmd>, ctx: egui::Context, app_version
         buf[..n].copy_from_slice(&tip_w[..n]);
         nid.szTip = buf;
 
-        let _ = Shell_NotifyIconW(NIM_ADD, &mut nid);
+        let _ = Shell_NotifyIconW(NIM_ADD, &nid);
 
         let state = Box::new(TrayState {
             tx_ui,

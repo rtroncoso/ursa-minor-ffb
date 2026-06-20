@@ -94,7 +94,7 @@ pub fn sync_aircraft_meta(fv: &mut FlightVars) {
     sync_wind_from_extras(fv);
     sync_motion_fields(fv);
     if let Some(n) = fv.extras.get("num_engines").copied() {
-        if n.is_finite() && n >= 1.0 && n <= 4.0 {
+        if n.is_finite() && (1.0..=4.0).contains(&n) {
             fv.num_engines = n.round().max(0.0) as u32;
         } else {
             fv.num_engines = 0;
@@ -213,11 +213,11 @@ fn rpm_from_rated_and_pct(rated: f64, pct: f64) -> Option<f64> {
     const MAX_DISPLAY_RPM: f64 = 9_500.0;
 
     let pct = normalize_sim_percent(pct);
-    if pct < 0.0 || pct > 150.0 {
+    if !(0.0..=150.0).contains(&pct) {
         return None;
     }
     let rpm = rated * pct / 100.0;
-    if rpm >= MIN_RPM && rpm <= MAX_DISPLAY_RPM {
+    if (MIN_RPM..=MAX_DISPLAY_RPM).contains(&rpm) {
         Some(rpm)
     } else {
         None
@@ -253,9 +253,8 @@ fn engine_rpm_from_index(extras: &HashMap<String, f64>, index: u32) -> Option<f6
     });
 
     let computed_from_n2_default = if computed_from_n2_rated.is_none() {
-        n2.filter(|&n2| n2 >= 5.0).and_then(|n2| {
-            rpm_from_rated_and_pct(DEFAULT_JET_RATED_RPM, n2)
-        })
+        n2.filter(|&n2| n2 >= 5.0)
+            .and_then(|n2| rpm_from_rated_and_pct(DEFAULT_JET_RATED_RPM, n2))
     } else {
         None
     };
@@ -273,7 +272,7 @@ fn engine_rpm_from_index(extras: &HashMap<String, f64>, index: u32) -> Option<f6
         .or(computed_from_n2_default)
         .or(computed_from_n1);
 
-    let sane_raw = |rpm: f64| rpm >= MIN_RPM && rpm <= MAX_SANE_RAW_RPM;
+    let sane_raw = |rpm: f64| (MIN_RPM..=MAX_SANE_RAW_RPM).contains(&rpm);
 
     match (raw, computed) {
         (Some(r), Some(c)) if sane_raw(r) && sane_raw(c) => {
@@ -687,7 +686,8 @@ mod tests {
     #[test]
     fn sync_eng_rpm_rejects_insane_rated_rpm() {
         let mut fv = FlightVars::default();
-        fv.extras.insert("eng_max_rated_rpm_1".to_string(), 27_000.0);
+        fv.extras
+            .insert("eng_max_rated_rpm_1".to_string(), 27_000.0);
         fv.extras.insert("eng_pct_max_rpm_1".to_string(), 80.0);
         fv.extras.insert("eng_rpm_1".to_string(), 2_400.0);
         sync_aircraft_meta(&mut fv);
@@ -697,7 +697,8 @@ mod tests {
     #[test]
     fn sync_eng_rpm_uses_n2_when_rated_is_insane() {
         let mut fv = FlightVars::default();
-        fv.extras.insert("eng_max_rated_rpm_1".to_string(), 27_000.0);
+        fv.extras
+            .insert("eng_max_rated_rpm_1".to_string(), 27_000.0);
         fv.extras.insert("eng_pct_max_rpm_1".to_string(), 0.8);
         fv.extras.insert("eng_rpm_1".to_string(), 28_000.0);
         fv.extras.insert("eng_n2_1".to_string(), 85.0);
@@ -765,7 +766,10 @@ mod tests {
             ..RumbleConfig::default()
         };
         let norm = engine_power_norm(&fv, &cfg);
-        assert!(norm > 0.8, "throttle should dominate at idle RPM, got {norm}");
+        assert!(
+            norm > 0.8,
+            "throttle should dominate at idle RPM, got {norm}"
+        );
     }
 
     #[test]

@@ -64,7 +64,7 @@ pub fn hid_query_caps_from_path(path_utf8: &str, logs: &LogBuffer) -> Option<(u1
 
     let out_len: u16 = caps.OutputReportByteLength;
 
-    let mut count: u16 = caps.NumberOutputValueCaps as u16;
+    let mut count: u16 = caps.NumberOutputValueCaps;
     let mut value_caps: Vec<HIDP_VALUE_CAPS> = vec![HIDP_VALUE_CAPS::default(); count as usize];
 
     let st_vals: NTSTATUS = unsafe {
@@ -85,7 +85,7 @@ pub fn hid_query_caps_from_path(path_utf8: &str, logs: &LogBuffer) -> Option<(u1
         ids.extend(
             value_caps
                 .iter()
-                .map(|vc| vc.ReportID as u8)
+                .map(|vc| vc.ReportID)
                 .filter(|&id| id != 0),
         );
         ids.sort_unstable();

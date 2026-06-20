@@ -1,6 +1,6 @@
 pub mod protocol;
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "app"))]
 mod win32;
 #[cfg(all(windows, feature = "app"))]
 mod worker;

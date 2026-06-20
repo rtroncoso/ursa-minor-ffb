@@ -251,8 +251,7 @@ impl RumbleEngine {
         }
 
         let mut total = if motion_effects_enabled {
-            let spoilers_pct =
-                fv.extras.get("spoilers_pct").copied().unwrap_or(0.0) / 100.0;
+            let spoilers_pct = fv.extras.get("spoilers_pct").copied().unwrap_or(0.0) / 100.0;
             let spoiler_term = spoiler_rumble_term(fv, cfg, s, spoilers_pct);
             if spoiler_boost_allowed(s, fv, spoilers_pct) {
                 effects.spoilers_boost_active = true;
@@ -299,11 +298,7 @@ fn normalize_gear_handle(value: f64) -> f64 {
 fn gear_extended_norm(fv: &FlightVars) -> f64 {
     if let Some(&pct) = fv.extras.get("gear_extended_pct") {
         if pct.is_finite() {
-            let norm = if pct <= 1.5 {
-                pct
-            } else {
-                pct / 100.0
-            };
+            let norm = if pct <= 1.5 { pct } else { pct / 100.0 };
             if norm > 0.01 {
                 return norm.clamp(0.0, 1.0);
             }
@@ -583,12 +578,15 @@ fn engine_vibe_amp(
     let startup_max = cfg.eng_rpm_startup_max as f64;
     let rpm_delta = effective_rpm - s.prev_eng_rpm;
     let throttle_delta = throttle - s.prev_eng_throttle;
-    let shutting_down =
-        s.prev_eng_rpm > startup_max && effective_rpm < s.prev_eng_rpm - 50.0 && effective_rpm < idle * 0.95;
+    let shutting_down = s.prev_eng_rpm > startup_max
+        && effective_rpm < s.prev_eng_rpm - 50.0
+        && effective_rpm < idle * 0.95;
     let starting_up =
         effective_rpm > ENGINE_OFF_RPM && s.prev_eng_rpm < startup_max * 0.5 && rpm_delta > 20.0;
     let in_spool_band = effective_rpm < idle * 0.98;
-    let throttle_spooling = throttle_delta > 0.03 && drive < 0.95 && (rpm_delta > 2.0 || profile != EngineVibeProfile::Ga);
+    let throttle_spooling = throttle_delta > 0.03
+        && drive < 0.95
+        && (rpm_delta > 2.0 || profile != EngineVibeProfile::Ga);
 
     if shutting_down {
         s.engine_spool_pulse_until = Some(Instant::now() + Duration::from_secs_f64(3.0));
@@ -613,14 +611,22 @@ fn engine_vibe_amp(
         };
         let norm = rpm_norm
             .max(drive)
-            .max(if starting_up || throttle_spooling { 0.35 } else { 0.0 });
+            .max(if starting_up || throttle_spooling {
+                0.35
+            } else {
+                0.0
+            });
         let amp = match profile {
             EngineVibeProfile::Ga => vibe * (0.42 + 0.78 * norm.powf(1.1)) * air_scale,
             EngineVibeProfile::Jet => vibe * (0.08 + 0.92 * norm.powf(1.2)) * air_scale,
             EngineVibeProfile::Fighter => vibe * (0.10 + 0.95 * norm.powf(1.15)) * air_scale,
         };
         let floor = if on_ground {
-            if norm > 0.25 { 4.0 } else { 2.0 }
+            if norm > 0.25 {
+                4.0
+            } else {
+                2.0
+            }
         } else {
             1.0
         };
@@ -658,11 +664,7 @@ fn engine_vibe_amp(
         EngineVibeProfile::Jet => vibe * (0.06 + 0.22 * drive.powf(1.15)) * air_scale,
         EngineVibeProfile::Fighter => vibe * (0.07 + 0.24 * drive.powf(1.1)) * air_scale,
     };
-    (
-        air_amp,
-        EngineVibeMode::Power,
-        drive,
-    )
+    (air_amp, EngineVibeMode::Power, drive)
 }
 
 fn engine_pulse_period(
@@ -845,8 +847,7 @@ mod tests {
 
         let jet_idle =
             engine_pulse_period(true, EngineVibeMode::Power, 0.0, EngineVibeProfile::Jet);
-        let jet_max =
-            engine_pulse_period(true, EngineVibeMode::Power, 1.0, EngineVibeProfile::Jet);
+        let jet_max = engine_pulse_period(true, EngineVibeMode::Power, 1.0, EngineVibeProfile::Jet);
         assert!(
             jet_max < jet_idle && jet_max < max_period,
             "jet faster than GA: jet_idle={jet_idle} jet_max={jet_max}"
@@ -1264,7 +1265,10 @@ mod tests {
         fv.extras.insert("eng_throttle_1".to_string(), 90.0);
         let (max_i, _) = max_engine_output_over_window(&mut engine, &fv, &c, 1);
         assert!(max_i > 0);
-        assert!(max_i >= 10, "TOGA engine vibe should be strong, got {max_i}");
+        assert!(
+            max_i >= 10,
+            "TOGA engine vibe should be strong, got {max_i}"
+        );
     }
 
     #[test]

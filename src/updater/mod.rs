@@ -11,9 +11,9 @@ use std::{
     thread,
 };
 
-use anyhow::{bail, Result};
 #[cfg(feature = "app")]
 use anyhow::Context;
+use anyhow::{bail, Result};
 use serde_json::Value;
 
 #[cfg(feature = "updater")]
@@ -133,10 +133,9 @@ fn fetch_checksum_for_asset(
     _tag: &str,
     asset_name: &str,
 ) -> Result<String> {
-    let sums_url = format!(
-        "https://github.com/rtroncoso/ursa-minor-ffb/releases/latest/download/SHA256SUMS.txt"
-    );
-    let mut resp = client.get(&sums_url).send()?;
+    let sums_url =
+        "https://github.com/rtroncoso/ursa-minor-ffb/releases/latest/download/SHA256SUMS.txt";
+    let mut resp = client.get(sums_url).send()?;
     if !resp.status().is_success() {
         bail!("Could not fetch SHA256SUMS.txt");
     }
@@ -174,15 +173,13 @@ pub fn spawn_startup_check(
     tx_ui: crossbeam_channel::Sender<crate::UiCmd>,
     current_version: &'static str,
 ) {
-    thread::spawn(move || {
-        match check_for_update(current_version) {
-            Ok(Some(info)) => {
-                let _ = tx_ui.send(crate::UiCmd::UpdateAvailable(info));
-            }
-            Ok(None) => {}
-            Err(e) => {
-                eprintln!("Update check failed: {e:#}");
-            }
+    thread::spawn(move || match check_for_update(current_version) {
+        Ok(Some(info)) => {
+            let _ = tx_ui.send(crate::UiCmd::UpdateAvailable(info));
+        }
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("Update check failed: {e:#}");
         }
     });
 }

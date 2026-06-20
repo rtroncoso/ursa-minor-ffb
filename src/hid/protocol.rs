@@ -96,11 +96,7 @@ pub fn ursa_model_label(variant: SidestickVariant, pid: u16) -> String {
         return format!("UNKNOWN (PID=0x{pid:04X})");
     };
 
-    format!(
-        "URSA MINOR {} {}",
-        variant.label().to_uppercase(),
-        hand
-    )
+    format!("URSA MINOR {} {}", variant.label().to_uppercase(), hand)
 }
 
 /// Minimum HID output report length for the simapp vibe intensity byte (body offset 7 → frame[8]).
@@ -120,19 +116,7 @@ pub fn build_simapp_vibe_frame(
     let channel = channel_byte_for(variant, pid);
 
     let body: [u8; 13] = [
-        channel,
-        0xBF,
-        0x00,
-        0x00,
-        0x03,
-        0x49,
-        0x00,
-        intensity,
-        0,
-        0,
-        0,
-        0,
-        0,
+        channel, 0xBF, 0x00, 0x00, 0x03, 0x49, 0x00, intensity, 0, 0, 0, 0, 0,
     ];
 
     let len = out_len as usize;

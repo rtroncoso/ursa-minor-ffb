@@ -9,10 +9,7 @@ use crate::hid::protocol::SidestickVariant;
 use crate::RumbleConfig;
 
 mod simvars;
-pub use simvars::{
-    canonical_extras_for, is_engine_extra_key, CORE_SIMVARS,
-    CORE_SIMVAR_COUNT,
-};
+pub use simvars::{canonical_extras_for, is_engine_extra_key, CORE_SIMVARS, CORE_SIMVAR_COUNT};
 
 pub const SIMCONNECT_UNUSED_DATUM: u32 = 0xFFFF_FFFF;
 
@@ -591,14 +588,19 @@ mod tests {
         let mut legacy = PresetKind::Commercial.built_in_default();
         legacy.rumble.base_airspeed = 77.0;
         let mut yaml = serde_yaml::to_string(&legacy.to_file()).unwrap();
-        yaml.push_str("simvars:\n  extra:\n  - name: SPOILERS\n    unit: Percent\n    key: spoilers_pct\n");
+        yaml.push_str(
+            "simvars:\n  extra:\n  - name: SPOILERS\n    unit: Percent\n    key: spoilers_pct\n",
+        );
 
         fs::write(dir.join("commercial.yml"), yaml).unwrap();
 
         let store = PresetStore::new(dir.clone());
         let loaded = store.load(PresetKind::Commercial);
         assert_eq!(loaded.rumble.base_airspeed, 77.0);
-        assert_eq!(loaded.simvars, PresetKind::Commercial.built_in_default().simvars);
+        assert_eq!(
+            loaded.simvars,
+            PresetKind::Commercial.built_in_default().simvars
+        );
 
         let rewritten = fs::read_to_string(dir.join("commercial.yml")).unwrap();
         assert!(!rewritten.contains("simvars:"));
