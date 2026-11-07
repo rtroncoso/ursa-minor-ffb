@@ -1,7 +1,7 @@
 use crate::{RumbleConfig, aircraft_profiles::AircraftProfile, i18n::Lang, types::GameOverride};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 const FILE_NAME: &str = "AuroraVibra.settings.json";
@@ -212,13 +212,46 @@ fn migrate_wt_enabled(file: &mut SettingsFile) {
     }
 }
 
+/// Атомарно записывает `contents` в `target`: сначала во временный файл
+/// рядом с целевым (тот же том — rename атомарен и на Windows, и на POSIX),
+/// затем rename поверх целевого. Аварийное завершение или пропажа питания
+/// посреди записи больше не оставляют усечённый JSON: целевой файл либо
+/// нетронут, либо заменён целиком.
+fn atomic_write(target: &Path, contents: &str) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let tmp_name = match target.file_name().and_then(|n| n.to_str()) {
+        Some(name) => format!("{name}.tmp"),
+        // У целевого пути нет нормального имени файла — пишем напрямую,
+        // атомарность здесь всё равно недостижима.
+        None => return std::fs::write(target, contents),
+    };
+    let tmp = target.with_file_name(tmp_name);
+
+    // File + sync_all, а не fs::write: гарантируем, что байты дописаны до
+    // диска ДО rename — иначе rename может опубликовать файл, содержимое
+    // которого ещё лежит только в кэше ОС.
+    let mut f = std::fs::File::create(&tmp)?;
+    if let Err(e) = f.write_all(contents.as_bytes()).and_then(|()| f.sync_all()) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    drop(f);
+
+    if let Err(e) = std::fs::rename(&tmp, target) {
+        let _ = std::fs::remove_file(&tmp); // не оставляем файл-сироту
+        return Err(e);
+    }
+    Ok(())
+}
+
 /// Сохраняет набор профилей на диск.
 /// Сначала пробует папку рядом с exe, затем %LOCALAPPDATA%\AuroraVibra.
 pub fn save(file: &SettingsFile) -> std::io::Result<PathBuf> {
     let json = serde_json::to_string_pretty(file).map_err(std::io::Error::other)?;
 
     let primary = primary_save_path();
-    if std::fs::write(&primary, &json).is_ok() {
+    if atomic_write(&primary, &json).is_ok() {
         return Ok(primary);
     }
 
@@ -226,13 +259,13 @@ pub fn save(file: &SettingsFile) -> std::io::Result<PathBuf> {
         if let Some(dir) = fallback.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        std::fs::write(&fallback, &json)?;
+        atomic_write(&fallback, &json)?;
         return Ok(fallback);
     }
 
     // Последний резерв — временная директория.
     let tmp = std::env::temp_dir().join(FILE_NAME);
-    std::fs::write(&tmp, &json)?;
+    atomic_write(&tmp, &json)?;
     Ok(tmp)
 }
 
@@ -264,5 +297,28 @@ mod tests {
         let json = r#"{"profiles": [], "effect_mode": "builtin"}"#;
         let file: SettingsFile = serde_json::from_str(json).unwrap();
         assert!(file.profiles.is_empty());
+    }
+
+    #[test]
+    fn atomic_write_overwrites_existing_file_and_leaves_no_tmp() {
+        // Уникальная подпапка в temp — тесты одного процесса могут идти
+        // параллельно, а tmp-файл atomic_write строится по имени целевого.
+        let dir = std::env::temp_dir().join(format!(
+            "aurora-atomic-write-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("settings.json");
+
+        atomic_write(&target, "{\"a\":1}").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "{\"a\":1}");
+
+        // Ключевой сценарий: rename ПОВЕРХ уже существующего файла (на
+        // Windows std::fs::rename это умеет) и отсутствие файла-сироты.
+        atomic_write(&target, "{\"a\":2}").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "{\"a\":2}");
+        assert!(!dir.join("settings.json.tmp").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
