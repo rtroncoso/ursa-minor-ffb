@@ -26,6 +26,9 @@ pub fn hid_query_caps_from_path(path_utf8: &str, logs: &LogBuffer) -> Option<(u1
     let disp: FILE_CREATION_DISPOSITION = OPEN_EXISTING;
     let attrs: FILE_FLAGS_AND_ATTRIBUTES = FILE_ATTRIBUTE_NORMAL;
 
+    // SAFETY: `wide` — NUL-терминированный UTF-16 буфер, живёт до конца
+    // вызова; остальные аргументы — значения, владения не передаём. В случае
+    // ошибки `.ok()?` возвращает None, недействительный хендл не используется.
     let h: HANDLE = unsafe {
         CreateFileW(
             PCWSTR(wide.as_ptr()),
@@ -40,8 +43,13 @@ pub fn hid_query_caps_from_path(path_utf8: &str, logs: &LogBuffer) -> Option<(u1
     };
 
     let mut pp = windows::Win32::Devices::HumanInterfaceDevice::PHIDP_PREPARSED_DATA::default();
+    // SAFETY: `h` — валидный открытый хендл устройства (проверен выше через
+    // .ok()?), `pp` — валидный указатель на локальную переменную, живущую
+    // до освобождения через HidD_FreePreparsedData ниже.
     let got_pp = unsafe { HidD_GetPreparsedData(h, &mut pp as *mut _) }.as_bool();
     if !got_pp {
+        // SAFETY: `h` валиден и закрывается ровно один раз — на этом пути
+        // функция сразу возвращается.
         let _ = unsafe { windows::Win32::Foundation::CloseHandle(h) };
         logs.push(format!(
             "HID: caps path='{}' → GetPreparsedData FAILED",
@@ -51,8 +59,12 @@ pub fn hid_query_caps_from_path(path_utf8: &str, logs: &LogBuffer) -> Option<(u1
     }
 
     let mut caps = HIDP_CAPS::default();
+    // SAFETY: `pp` получен из успешного HidD_GetPreparsedData выше и ещё не
+    // освобождён; `caps` — валидный указатель на локальную структуру.
     let st_caps: NTSTATUS = unsafe { HidP_GetCaps(pp, &mut caps) };
     if st_caps != HIDP_STATUS_SUCCESS {
+        // SAFETY: `pp` и `h` валидны, каждый освобождается ровно один раз —
+        // на этом пути функция сразу возвращается.
         let _ = unsafe { HidD_FreePreparsedData(pp) };
         let _ = unsafe { windows::Win32::Foundation::CloseHandle(h) };
         logs.push(format!(
@@ -67,6 +79,11 @@ pub fn hid_query_caps_from_path(path_utf8: &str, logs: &LogBuffer) -> Option<(u1
     let mut count: u16 = caps.NumberOutputValueCaps;
     let mut value_caps: Vec<HIDP_VALUE_CAPS> = vec![HIDP_VALUE_CAPS::default(); count as usize];
 
+    // SAFETY: `value_caps` имеет ёмкость не меньше исходного `count` —
+    // буфер, куда HidP_GetValueCaps пишет не более *count записей, валиден;
+    // `count` — валидный указатель на локальную u16; `pp` валиден и не
+    // освобождён. После возврата используем только первые `count` записей
+    // (см. truncate ниже).
     let st_vals: NTSTATUS = unsafe {
         HidP_GetValueCaps(
             HidP_Output,
@@ -96,6 +113,9 @@ pub fn hid_query_caps_from_path(path_utf8: &str, logs: &LogBuffer) -> Option<(u1
         }
     }
 
+    // SAFETY: финальное освобождение на успешном пути: `pp` и `h` валидны,
+    // каждый освобождается ровно один раз (на путях раннего возврата выше —
+    // свои парные вызовы).
     let _ = unsafe { HidD_FreePreparsedData(pp) };
     let _ = unsafe { windows::Win32::Foundation::CloseHandle(h) };
 

@@ -246,6 +246,10 @@ fn try_load_embedded_simconnect(logs: &LogBuffer) -> Result<Library> {
                 dst.display(),
                 tmp.display()
             ));
+            // SAFETY: загружаем DLL, байты которой только что записали сами
+            // из зашитой в бинарь константы EMBED_SIMCONNECT_BYTES (штатная
+            // Microsoft SimConnect.dll); имя tmp-файла уникально для этого
+            // процесса (PID в суффиксе), подмены чужим кодом нет.
             let lib = unsafe { Library::new(&tmp) }
                 .with_context(|| format!("Library::new({})", tmp.display()))?;
             logs.push("SimConnect: embedded DLL loaded successfully");
@@ -257,6 +261,9 @@ fn try_load_embedded_simconnect(logs: &LogBuffer) -> Result<Library> {
         "SimConnect: loading embedded DLL from {}",
         dst.display()
     ));
+    // SAFETY: `dst` — копия штатной Microsoft SimConnect.dll, записанная
+    // нами из EMBED_SIMCONNECT_BYTES (либо уже лежавшая там от прошлого
+    // запуска — тогда её байты сверены выше).
     let lib = unsafe { Library::new(&dst) }
         .with_context(|| format!("Library::new({})", dst.display()))?;
 
@@ -265,6 +272,11 @@ fn try_load_embedded_simconnect(logs: &LogBuffer) -> Result<Library> {
 }
 
 fn bind_simconnect(lib: Library) -> Result<SimConnectFns> {
+    // SAFETY: связываемся только с штатной Microsoft SimConnect.dll (её
+    // происхождение проверено в load_simconnect/try_load_embedded_simconnect);
+    // типы указателей на функции (Pfn*) соответствуют ABI из MSFS SDK.
+    // Библиотека сохраняется в SimConnectFns::_lib, поэтому остаётся
+    // загруженной, пока живы полученные из неё указатели.
     unsafe {
         let open: PfnSimConnectOpen = *lib.get(b"SimConnect_Open\0")?;
         let close: PfnSimConnectClose = *lib.get(b"SimConnect_Close\0")?;
@@ -315,6 +327,9 @@ fn load_simconnect(logs: &LogBuffer) -> Result<SimConnectFns> {
             "SimConnect: trying user-configured path {}...",
             path.display()
         ));
+        // SAFETY: путь к DLL задал сам пользователь в настройках — это
+        // осознанная точка расширения (свой билд SimConnect); ошибка
+        // загрузки обрабатывается и просто логируется.
         match unsafe { Library::new(&path) } {
             Ok(lib) => {
                 logs.push("SimConnect: loaded from user-configured path");
@@ -332,6 +347,9 @@ fn load_simconnect(logs: &LogBuffer) -> Result<SimConnectFns> {
         let path = dir.join("SimConnect.dll");
         if path.exists() {
             logs.push(format!("SimConnect: trying {}...", path.display()));
+            // SAFETY: загружаем SimConnect.dll из каталога собственного exe —
+            // того места, куда пользователь сам распаковал приложение;
+            // файл проверен на существование строкой выше.
             match unsafe { Library::new(&path) } {
                 Ok(lib) => {
                     logs.push("SimConnect: loaded from EXE directory");
@@ -344,6 +362,10 @@ fn load_simconnect(logs: &LogBuffer) -> Result<SimConnectFns> {
 
     // 3. Обычный поиск Win32 — PATH и системные каталоги.
     logs.push("SimConnect: trying normal load (PATH / system dirs)...");
+    // SAFETY: стандартный поиск DLL средствами загрузчика Windows — так же
+    // работает любое приложение, линкующееся с SimConnect; это шаг-фолбэк
+    // после явных путей выше, и он покрывает установки MSFS, где копия
+    // библиотеки уже видна системе.
     match unsafe { Library::new("SimConnect.dll") } {
         Ok(lib) => {
             logs.push("SimConnect: loaded via normal search");
@@ -403,6 +425,13 @@ pub fn sim_worker(
     // wt_worker (см. main.rs).
     let mut recorder = SessionRecorder::new();
 
+    // SAFETY: весь цикл сессии SimConnect работает через указатели на
+    // функции из SimConnectFns — их происхождение и ABI проверены в
+    // bind_simconnect, а `_lib` внутри SimConnectFns удерживает DLL
+    // загруженной на всё время жизни `fns`. `h_sc` проверяется на null
+    // после каждого Open; все C-строки (CString) живут до конца своих
+    // вызовов. Пользовательские имена L:Var идут отдельным путём с
+    // обработкой ошибок (см. apply_lvar_defs), без unwrap.
     unsafe {
         loop {
             let mut h_sc: Handle = std::ptr::null_mut();

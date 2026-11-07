@@ -98,6 +98,10 @@ fn wait_for_process_exit(pid: u32, timeout: Duration) {
         OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
     };
 
+    // SAFETY: `pid` пришёл аргументом командной строки от основного
+    // процесса; хендл `h` проверен на валидность до использования и
+    // закрывается ровно один раз. WaitForSingleObject только ждёт —
+    // состояние чужого процесса не меняет.
     unsafe {
         let Ok(h) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) else {
             return;
@@ -576,6 +580,10 @@ fn spawn_helper_via_uac(
     );
     let params_w = wide_str(&params);
     let helper_w = wide_os(helper_path.as_os_str());
+    // SAFETY: `params_w` и `helper_w` — NUL-терминированные UTF-16 буферы,
+    // живущие до конца вызова; строка с "runas" — статическая (макрос w!).
+    // Код возврата ShellExecuteW — псевдо-хендл, сравниваем с 32 по
+    // документированному контракту API.
     unsafe {
         let h = ShellExecuteW(
             None,
@@ -630,6 +638,9 @@ fn apply_update(
 
     // Build a stable wide string that stays alive for the call.
     let target_w = wide_os(target.as_os_str());
+    // SAFETY: `target_w` — NUL-терминированный UTF-16 буфер, живёт до конца
+    // вызова; "open" — статическая строка (макрос w!). Псевдо-хендл результата
+    // сравниваем с 32 по документированному контракту ShellExecuteW.
     unsafe {
         let hinst = ShellExecuteW(
             None,
@@ -678,6 +689,9 @@ fn relaunch_self_elevated(
     );
     let params_w = wide_str(&params);
     let me_w = wide_os(me.as_os_str());
+    // SAFETY: `params_w` и `me_w` — NUL-терминированные UTF-16 буферы,
+    // живущие до конца вызова; "runas" — статическая строка (макрос w!).
+    // Псевдо-хендл результата сравниваем с 32 по контракту ShellExecuteW.
     unsafe {
         let h = ShellExecuteW(
             None,
@@ -805,6 +819,9 @@ fn replace_file(src: &Path, dst: &Path) -> Result<()> {
 fn confirm(hwnd: HWND, title: &str, text: &str) -> bool {
     let title_w = wide_str(title);
     let text_w = wide_str(text);
+    // SAFETY: `title_w`/`text_w` — NUL-терминированные UTF-16 буферы, живущие
+    // до конца вызова; hwnd — либо валидное окно, либо HWND(0) (без родителя),
+    // оба варианта допустимы для MessageBoxW.
     unsafe {
         MessageBoxW(
             hwnd,
@@ -823,6 +840,7 @@ fn msgbox(hwnd: HWND, title: &str, text: &str, warn: bool) {
     };
     let title_w = wide_str(title);
     let text_w = wide_str(text);
+    // SAFETY: см. confirm() выше — те же инварианты буферов и hwnd.
     unsafe {
         let _ = MessageBoxW(
             hwnd,

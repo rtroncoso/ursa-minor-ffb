@@ -72,6 +72,9 @@ static TRAY_STATE: OnceLock<Mutex<Box<TrayState>>> = OnceLock::new();
 /// `main::acquire_single_instance_lock`) — same "find window by title, show +
 /// foreground" logic the tray icon already used, no need for a second copy.
 pub fn bring_main_to_front() {
+    // SAFETY: `title_w` — NUL-терминированный UTF-16 буфер, жив до конца
+    // блока; хендл окна, возвращённый FindWindowW, лишь передаётся обратно
+    // в Win32 (владения не передаём). Нулевой хендл отфильтрован проверкой.
     unsafe {
         let title_w = wide(&main_window_title());
         let main_hwnd = FindWindowW(None, PCWSTR(title_w.as_ptr()));
@@ -97,12 +100,19 @@ pub fn bring_main_to_front() {
     }
 }
 
+// SAFETY: колбэк оконной процедуры — сигнатура и ABI (`extern "system"`)
+// соответствуют WNDPROC, указатель на функцию передаётся в RegisterClassW
+// как есть; Windows вызывает её только на потоке, создавшем окно (трей-
+// поток ниже), все обращения к разделяемому состоянию идут через Mutex.
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: u32,
     _wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // SAFETY: все вызовы Win32 здесь работают с hwnd нашего собственного
+    // окна (передан системой) и локальными переменными; DefWindowProcW —
+    // стандартный делегат для необработанных сообщений.
     unsafe {
         match msg {
             WM_TRAYICON => {
@@ -265,6 +275,10 @@ unsafe extern "system" fn wnd_proc(
 }
 
 fn load_app_icon(hinst: HINSTANCE) -> windows::Win32::UI::WindowsAndMessaging::HICON {
+    // SAFETY: `name` — NUL-терминированный UTF-16 буфер, жив до конца
+    // вызова; `hinst` — валидный HINSTANCE текущего модуля (см. вызов
+    // GetModuleHandleW в spawn_tray_with_ctx); LR_SHARED означает, что
+    // система владеет ресурсом — удалять его не нужно.
     unsafe {
         let name = wide("MAINICON");
         let hicon = windows::Win32::UI::WindowsAndMessaging::LoadImageW(
@@ -286,6 +300,11 @@ pub fn spawn_tray_with_ctx(
     app_version: &'static str,
     force_quit: Arc<AtomicBool>,
 ) {
+    // SAFETY: классическое Win32-окно и цикл сообщений: все буферы
+    // (class_name_w, заголовок окна, szTip) — локальные переменные,
+    // живущие до конца соответствующих вызовов; nid.cbSize выставлен в
+    // фактический размер структуры; wnd_proc имеет корректный ABI.
+    // Вся работа с окном идёт в одном этом потоке.
     std::thread::spawn(move || unsafe {
         let hinst = HINSTANCE(GetModuleHandleW(None).unwrap().0);
 
@@ -371,6 +390,10 @@ pub fn refresh_tooltip() {
         let n = tip_w.len().min(buf.len() - 1);
         buf[..n].copy_from_slice(&tip_w[..n]);
         st.nid.szTip = buf;
+        // SAFETY: st.nid — валидная, полностью инициализированная
+        // NOTIFYICONDATAW (cbSize выставлен при создании), иконка уже
+        // зарегистрирована через NIM_ADD в трей-потоке; передаём только
+        // ссылку, живущую до конца вызова.
         unsafe {
             let _ = Shell_NotifyIconW(NIM_MODIFY, &st.nid);
         }

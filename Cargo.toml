@@ -19,6 +19,13 @@ autobins = false
 # его не должно быть в публикуемом архиве крейта. TXT/ — устаревшие копии исходников.
 exclude = ["lib/", "TXT/", "dist/"]
 
+[lints.clippy]
+# Каждый unsafe-блок обязан иметь SAFETY-комментарий с обоснованием
+# инвариантов (валидность хендлов, время жизни буферов, владение). "warn"
+# здесь достаточно: CI гоняет clippy с -D warnings, так что пропущенный
+# комментарий всё равно роняет сборку.
+undocumented_unsafe_blocks = "warn"
+
 [lib]
 name = "aurora_vibra"
 path = "src/lib.rs"
